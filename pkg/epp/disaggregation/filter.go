@@ -105,15 +105,8 @@ func (f *gatingFilter) Filter(ctx context.Context, request *fwksched.InferenceRe
 		return append(make([]fwksched.Endpoint, 0, len(pods)), pods...)
 	}
 
-	// Fast path: any strict pin means the client has expressed a constraint.
-	// Strict downstream will narrow accordingly and the picker will
-	// distribute over what survives — no reason for gating to make a
-	// stochastic revision guess that could conflict with the pin.
-	if f.hasStrictHeader(request) {
-		return append(make([]fwksched.Endpoint, 0, len(pods)), pods...)
-	}
-
-	// Fast path: pool already has ≤1 unique revision. Nothing to shape.
+	// Fast path: pool already has ≤1 unique revision. Nothing to gate or
+	// shape — there's only one (or zero) choice.
 	seenRevisions := uniqueRevisions(pods, revisionLabelKey)
 	if len(seenRevisions) <= 1 {
 		return append(make([]fwksched.Endpoint, 0, len(pods)), pods...)
@@ -128,33 +121,45 @@ func (f *gatingFilter) Filter(ctx context.Context, request *fwksched.InferenceRe
 		return nil
 	}
 
-	// Weight per revision in the pool (0 if any required role has no Ready
-	// pod → gated).
+	// Coverage check ALWAYS runs — even when a strict header pins the
+	// revision. A client that hand-pins a drifted revision (e.g. v1 with
+	// zero decode pods) must see 503 upfront on prefill, not a 200 that
+	// then blows up on the decode leg. Compute weights, drop revisions
+	// with weight 0, and emit the gating metric before proceeding.
 	weights := make(map[string]int, len(seenRevisions))
 	for revision := range seenRevisions {
-		weights[revision] = crossRoleWeight(roleCounts[revision], requiredRoles)
-	}
-
-	// Emit gating-drop metrics for revisions that flunked coverage,
-	// before we discard them.
-	for revision, weight := range weights {
-		if weight == 0 {
+		w := crossRoleWeight(roleCounts[revision], requiredRoles)
+		if w == 0 {
 			recordGatingDropped(revision)
-			delete(weights, revision)
+			continue
 		}
+		weights[revision] = w
 	}
-
 	if len(weights) == 0 {
 		return nil
 	}
-
-	chosen := f.pickWeightedRevision(weights)
-
-	survivors := make([]fwksched.Endpoint, 0, len(pods))
+	covered := make([]fwksched.Endpoint, 0, len(pods))
 	for _, endpoint := range pods {
 		if endpoint == nil || endpoint.GetMetadata() == nil {
 			continue
 		}
+		if _, ok := weights[endpoint.GetMetadata().Labels[revisionLabelKey]]; ok {
+			covered = append(covered, endpoint)
+		}
+	}
+
+	// Weighted-random-pick is the load-shaping step — it collapses the
+	// pool to one revision. Skip it when the client has already expressed
+	// a constraint via any strict header: strict downstream will narrow,
+	// and forcing a stochastic choice here could pick a different
+	// revision than the pin (→ 503 from strict finding zero matches).
+	if f.hasStrictHeader(request) {
+		return covered
+	}
+
+	chosen := f.pickWeightedRevision(weights)
+	survivors := make([]fwksched.Endpoint, 0, len(covered))
+	for _, endpoint := range covered {
 		if endpoint.GetMetadata().Labels[revisionLabelKey] == chosen {
 			survivors = append(survivors, endpoint)
 		}

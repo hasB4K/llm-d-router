@@ -456,6 +456,37 @@ func TestGatingFilter_SkipsWhenRevisionHeaderPresent(t *testing.T) {
 	}
 }
 
+func TestGatingFilter_DropsUncoveredRevisionEvenWhenHeaderPinsIt(t *testing.T) {
+	// Rollout-drift + client hand-pin regression case: v1 has 3 prefill
+	// pods but 0 decode pods (decode-v1 drifted). Client sends prefill
+	// request pinned to v1. Gating's coverage check must still run despite
+	// the pin — it drops v1 from candidates, downstream strict then finds
+	// zero v1 pods → 503 at prefill (fail-fast).
+	//
+	// Without the coverage-always contract, gating would passthrough all
+	// pods, strict would narrow to v1 prefill pods and serve a 200, and
+	// the client's follow-up decode call would 503 later. That silent
+	// migration of the failure from prefill to decode is the bug the fix
+	// prevents.
+	c := gatingFixture(t, validConfig(), map[string]map[string]int{
+		"v1": {"prefill": 3, "decode": 0},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	f := newGatingFilter(c)
+	f.rand01 = func() float64 { panic("rand01 must not be called when the revision header is set") }
+	pods := []fwksched.Endpoint{
+		endpoint("p1a", revLabels("v1")),
+		endpoint("p1b", revLabels("v1")),
+		endpoint("p1c", revLabels("v1")),
+		endpoint("p2", revLabels("v2")),
+	}
+	req := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}}
+	got := f.Filter(context.Background(), req, pods)
+	if len(got) != 1 || got[0].GetMetadata().PodName != "p2" {
+		t.Fatalf("v1 must be gated out (decode=0) even though header pins it; want [p2], got %v", got)
+	}
+}
+
 func TestGatingFilter_SkipsWhenSingleRevisionInPool(t *testing.T) {
 	// If the candidate pool already has only one unique revision — e.g.
 	// because the fleet has one revision, or an upstream filter narrowed —
