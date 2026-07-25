@@ -105,8 +105,11 @@ func (f *gatingFilter) Filter(ctx context.Context, request *fwksched.InferenceRe
 		return append(make([]fwksched.Endpoint, 0, len(pods)), pods...)
 	}
 
-	// Fast path: header-pinned. Strict downstream will do the narrowing.
-	if f.hasRevisionHeader(request) {
+	// Fast path: any strict pin means the client has expressed a constraint.
+	// Strict downstream will narrow accordingly and the picker will
+	// distribute over what survives — no reason for gating to make a
+	// stochastic revision guess that could conflict with the pin.
+	if f.hasStrictHeader(request) {
 		return append(make([]fwksched.Endpoint, 0, len(pods)), pods...)
 	}
 
@@ -173,24 +176,22 @@ func crossRoleWeight(perRole map[string]int, required []string) int {
 	return total
 }
 
-// hasRevisionHeader reports whether the request carries the header that
-// pins the revision axis. Convention: the revision axis is the first
-// entry in Selectors — same source as controller.revisionLabelKey — and
-// only counts when it's a strict-mode selector (prefer mode is a hint,
-// not a pin).
-func (f *gatingFilter) hasRevisionHeader(request *fwksched.InferenceRequest) bool {
+// hasStrictHeader reports whether the request carries the header for any
+// strict-mode selector. Prefer-mode selectors are hints and don't count —
+// only a hard pin should suppress gating's weighted pick.
+func (f *gatingFilter) hasStrictHeader(request *fwksched.InferenceRequest) bool {
 	if request == nil {
 		return false
 	}
-	selectors := f.controller.config.Selectors
-	if len(selectors) == 0 {
-		return false
+	for _, selector := range f.controller.config.Selectors {
+		if selector.Mode != ModeStrict {
+			continue
+		}
+		if request.Headers[selector.HeaderName] != "" {
+			return true
+		}
 	}
-	revSelector := selectors[0]
-	if revSelector.Mode != ModeStrict {
-		return false
-	}
-	return request.Headers[revSelector.HeaderName] != ""
+	return false
 }
 
 // uniqueRevisions returns the set of distinct revision-label values in
