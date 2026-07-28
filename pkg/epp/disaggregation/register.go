@@ -53,8 +53,8 @@ func Register(ctx context.Context, mgr ctrl.Manager, namespace string, config Co
 	registerMetrics()
 	controller := newController(config, mgr.GetCache(), watchNamespace, scope)
 
-	if config.Gating.Active() {
-		roles := config.Gating.RequireRoles.Values
+	if config.RevisionGating.Active() {
+		roles := config.RevisionGating.RequireRoles.Values
 		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 			if !mgr.GetCache().WaitForCacheSync(ctx) {
 				return errors.New("pod cache did not sync before context expired")
@@ -68,13 +68,13 @@ func Register(ctx context.Context, mgr ctrl.Manager, namespace string, config Co
 	ctrllog.FromContext(ctx).Info("disaggregation controller registered",
 		"namespace", watchNamespace,
 		"scope", config.Scope.LabelSelector,
-		"selectors", len(config.Selectors),
-		"gating", gatingForLog(config.Gating),
+		"selectors", len(config.HeaderSelectors),
+		"gating", gatingForLog(config.RevisionGating),
 	)
 	return controller, nil
 }
 
-func gatingForLog(g *Gating) string {
+func gatingForLog(g *RevisionGating) string {
 	if g == nil {
 		return "off"
 	}

@@ -12,7 +12,7 @@ func validConfig() Config {
 		Scope: Scope{
 			LabelSelector: "disaggregatedset.x-k8s.io/name=my-set",
 		},
-		Selectors: []Selector{
+		HeaderSelectors: []HeaderSelector{
 			{
 				Name:       "revision",
 				HeaderName: "x-disagg-revision",
@@ -20,12 +20,11 @@ func validConfig() Config {
 				Mode:       ModeStrict,
 			},
 		},
-		Gating: &Gating{
-			Mode: GatingModeSum,
-			RequireRoles: &RequireRoles{
-				LabelKey: "disaggregatedset.x-k8s.io/role",
-				Values:   []string{"prefill", "decode"},
-			},
+		RevisionGating: &RevisionGating{
+			RevisionLabelKey: "disaggregatedset.x-k8s.io/revision",
+			RoleLabelKey:     "disaggregatedset.x-k8s.io/role",
+			Mode:             GatingModeSum,
+			RequireRoles:     &RequireRoles{Values: []string{"prefill", "decode"}},
 		},
 	}
 }
@@ -56,75 +55,96 @@ func TestValidate_UnparsableScopeSelector(t *testing.T) {
 	assertValidateError(t, cfg, "scope.labelSelector")
 }
 
-func TestValidate_EmptySelectors(t *testing.T) {
+func TestValidate_EmptyHeaderSelectorsIsAllowed(t *testing.T) {
+	// Gating-only configs (no header pinning) are legitimate — the
+	// operator wants server-side revision shaping without a client-
+	// controlled pin. HeaderSelectors is now optional.
 	cfg := validConfig()
-	cfg.Selectors = nil
-	assertValidateError(t, cfg, "selectors")
+	cfg.HeaderSelectors = nil
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty headerSelectors should be allowed: %v", err)
+	}
 }
 
 func TestValidate_SelectorMissingName(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors[0].Name = ""
-	assertValidateError(t, cfg, "selectors[0].name")
+	cfg.HeaderSelectors[0].Name = ""
+	assertValidateError(t, cfg, "headerSelectors[0].name")
 }
 
 func TestValidate_SelectorMissingHeaderName(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors[0].HeaderName = ""
-	assertValidateError(t, cfg, "selectors[0].headerName")
+	cfg.HeaderSelectors[0].HeaderName = ""
+	assertValidateError(t, cfg, "headerSelectors[0].headerName")
 }
 
 func TestValidate_SelectorMissingLabelKey(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors[0].LabelKey = ""
-	assertValidateError(t, cfg, "selectors[0].labelKey")
+	cfg.HeaderSelectors[0].LabelKey = ""
+	assertValidateError(t, cfg, "headerSelectors[0].labelKey")
 }
 
 func TestValidate_SelectorUnknownMode(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors[0].Mode = "loose"
-	assertValidateError(t, cfg, "selectors[0].mode")
+	cfg.HeaderSelectors[0].Mode = "loose"
+	assertValidateError(t, cfg, "headerSelectors[0].mode")
 }
 
 func TestValidate_DuplicateSelectorName(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors = append(cfg.Selectors, Selector{
+	cfg.HeaderSelectors = append(cfg.HeaderSelectors, HeaderSelector{
 		Name:       "revision", // duplicate
 		HeaderName: "x-disagg-other",
 		LabelKey:   "foo",
 		Mode:       ModeStrict,
 	})
-	assertValidateError(t, cfg, "duplicate selector name")
+	assertValidateError(t, cfg, "duplicate name")
 }
 
 func TestValidate_DuplicateHeaderName(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors = append(cfg.Selectors, Selector{
+	cfg.HeaderSelectors = append(cfg.HeaderSelectors, HeaderSelector{
 		Name:       "other",
 		HeaderName: "x-disagg-revision", // duplicate
 		LabelKey:   "foo",
 		Mode:       ModeStrict,
 	})
-	assertValidateError(t, cfg, "duplicate header name")
+	assertValidateError(t, cfg, "duplicate headerName")
 }
 
-func TestValidate_GatingRequireRolesMissingLabelKey(t *testing.T) {
+func TestValidate_GatingRoleLabelKeyDefaults(t *testing.T) {
 	cfg := validConfig()
-	cfg.Gating.RequireRoles.LabelKey = ""
-	assertValidateError(t, cfg, "gating.requireRoles.labelKey")
+	cfg.RevisionGating.RoleLabelKey = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty roleLabelKey should default silently: %v", err)
+	}
+	if cfg.RevisionGating.RoleLabelKey != DefaultRoleLabel {
+		t.Fatalf("want default %q, got %q", DefaultRoleLabel, cfg.RevisionGating.RoleLabelKey)
+	}
+}
+
+func TestValidate_GatingRevisionLabelKeyDefaults(t *testing.T) {
+	cfg := validConfig()
+	cfg.RevisionGating.RevisionLabelKey = ""
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("empty revisionLabelKey should default silently: %v", err)
+	}
+	if cfg.RevisionGating.RevisionLabelKey != DefaultRevisionLabel {
+		t.Fatalf("want default %q, got %q", DefaultRevisionLabel, cfg.RevisionGating.RevisionLabelKey)
+	}
 }
 
 func TestValidate_GatingRequireRolesEmptyValues(t *testing.T) {
 	cfg := validConfig()
-	cfg.Gating.RequireRoles.Values = nil
-	assertValidateError(t, cfg, "gating.requireRoles.values")
+	cfg.RevisionGating.RequireRoles.Values = nil
+	assertValidateError(t, cfg, "revisionGating.requireRoles.values")
 }
 
 func TestValidate_GatingOptional(t *testing.T) {
 	// The whole gating block is optional; leaving it nil validates and
 	// simply skips wiring the gating filter at boot.
 	cfg := validConfig()
-	cfg.Gating = nil
+	cfg.RevisionGating = nil
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config without gating should validate: %v", err)
 	}
@@ -132,46 +152,46 @@ func TestValidate_GatingOptional(t *testing.T) {
 
 func TestValidate_GatingUnknownMode(t *testing.T) {
 	cfg := validConfig()
-	cfg.Gating.Mode = "bogus"
-	assertValidateError(t, cfg, "gating.mode")
+	cfg.RevisionGating.Mode = "bogus"
+	assertValidateError(t, cfg, "revisionGating.mode")
 }
 
 func TestValidate_GatingSumWithoutRequireRoles(t *testing.T) {
 	// mode=sum needs the requireRoles sub-block. Missing it is a config
 	// error, not a silent no-op.
 	cfg := validConfig()
-	cfg.Gating.RequireRoles = nil
-	assertValidateError(t, cfg, "gating.requireRoles is required")
+	cfg.RevisionGating.RequireRoles = nil
+	assertValidateError(t, cfg, "revisionGating.requireRoles is required")
 }
 
 func TestValidate_GatingDisabledSkipsSubValidation(t *testing.T) {
 	// mode=disabled is a legitimate way to keep the block for documentation
 	// while turning the filter off; the sub-block does not need to be set.
 	cfg := validConfig()
-	cfg.Gating.Mode = GatingModeDisabled
-	cfg.Gating.RequireRoles = nil
+	cfg.RevisionGating.Mode = GatingModeDisabled
+	cfg.RevisionGating.RequireRoles = nil
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("gating.mode=disabled should validate without requireRoles: %v", err)
 	}
 }
 
 func TestGating_Active(t *testing.T) {
-	if (*Gating)(nil).Active() {
+	if (*RevisionGating)(nil).Active() {
 		t.Errorf("nil should not be active")
 	}
-	sum := &Gating{Mode: GatingModeSum, RequireRoles: &RequireRoles{LabelKey: "k", Values: []string{"r"}}}
+	sum := &RevisionGating{Mode: GatingModeSum, RequireRoles: &RequireRoles{Values: []string{"r"}}}
 	if !sum.Active() {
 		t.Errorf("mode=sum with requireRoles should be active")
 	}
-	sumMissingSub := &Gating{Mode: GatingModeSum}
+	sumMissingSub := &RevisionGating{Mode: GatingModeSum}
 	if sumMissingSub.Active() {
 		t.Errorf("mode=sum without requireRoles should not be active")
 	}
-	disabled := &Gating{Mode: GatingModeDisabled, RequireRoles: &RequireRoles{LabelKey: "k", Values: []string{"r"}}}
+	disabled := &RevisionGating{Mode: GatingModeDisabled, RequireRoles: &RequireRoles{Values: []string{"r"}}}
 	if disabled.Active() {
 		t.Errorf("mode=disabled should not be active")
 	}
-	unknown := &Gating{Mode: "bogus"}
+	unknown := &RevisionGating{Mode: "bogus"}
 	if unknown.Active() {
 		t.Errorf("unknown mode should not be active")
 	}
@@ -181,7 +201,7 @@ func TestSelector_UnmarshalJSON_LowercasesHeaderName(t *testing.T) {
 	// Normalisation is at the JSON boundary now; construction in Go leaves
 	// the field alone.
 	raw := []byte(`{"name":"revision","headerName":"X-Disagg-Revision","labelKey":"lk","mode":"strict"}`)
-	var selector Selector
+	var selector HeaderSelector
 	if err := json.Unmarshal(raw, &selector); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -193,12 +213,12 @@ func TestSelector_UnmarshalJSON_LowercasesHeaderName(t *testing.T) {
 func TestValidate_LeavesHeaderNameAloneOnInCodeConstruction(t *testing.T) {
 	// Validate must not mutate — normalisation is at unmarshal time.
 	cfg := validConfig()
-	cfg.Selectors[0].HeaderName = "X-Disagg-Revision"
+	cfg.HeaderSelectors[0].HeaderName = "X-Disagg-Revision"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("mixed-case header name should validate: %v", err)
 	}
-	if cfg.Selectors[0].HeaderName != "X-Disagg-Revision" {
-		t.Fatalf("Validate mutated HeaderName: got %q", cfg.Selectors[0].HeaderName)
+	if cfg.HeaderSelectors[0].HeaderName != "X-Disagg-Revision" {
+		t.Fatalf("Validate mutated HeaderName: got %q", cfg.HeaderSelectors[0].HeaderName)
 	}
 }
 

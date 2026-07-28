@@ -34,7 +34,7 @@ func TestWireInto_GatingAtHead_PreferAtTail(t *testing.T) {
 	profile.AppendFilter(&namedTestFilter{name: "operator-filter"})
 
 	config := validConfig()
-	config.Selectors = append(config.Selectors, Selector{
+	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
 		Name:       "slice",
 		HeaderName: "x-disagg-slice",
 		LabelKey:   "mistral.ai/slice",
@@ -69,7 +69,7 @@ func TestWireInto_OmitsStrictWhenNoStrictSelectors(t *testing.T) {
 	profile := schedulerConfig.Profiles()["default"]
 
 	config := validConfig()
-	config.Selectors[0].Mode = ModePrefer
+	config.HeaderSelectors[0].Mode = ModePrefer
 	controller := newTestController(config)
 	requestControlConfig := requestcontrol.NewConfig()
 

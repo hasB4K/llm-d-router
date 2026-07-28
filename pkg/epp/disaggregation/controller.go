@@ -43,13 +43,20 @@ var (
 // should be filtered against. Prefer Register() from an EPP boot path;
 // newController is the low-level constructor for tests.
 func newController(config Config, reader client.Reader, namespace string, scope labels.Selector) *Controller {
+	// Label keys come from the RevisionGating block, with defaults for
+	// omitted values. Defensive fill here so tests that construct the
+	// controller directly (without Validate) still get correct behaviour.
 	revisionLabelKey := ""
-	if len(config.Selectors) > 0 {
-		revisionLabelKey = config.Selectors[0].LabelKey
-	}
 	roleLabelKey := ""
-	if config.Gating.Active() {
-		roleLabelKey = config.Gating.RequireRoles.LabelKey
+	if config.RevisionGating != nil {
+		revisionLabelKey = config.RevisionGating.RevisionLabelKey
+		if revisionLabelKey == "" {
+			revisionLabelKey = DefaultRevisionLabel
+		}
+		roleLabelKey = config.RevisionGating.RoleLabelKey
+		if roleLabelKey == "" {
+			roleLabelKey = DefaultRoleLabel
+		}
 	}
 	return &Controller{
 		config:           config,
@@ -74,15 +81,15 @@ func (c *Controller) TypedName() fwkplugin.TypedName { return c.typedName }
 // scheduler-filter convention so callers can treat their input as
 // read-only regardless of what happens downstream.
 func (c *Controller) filter(ctx context.Context, request *fwksched.InferenceRequest, pods []fwksched.Endpoint) []fwksched.Endpoint {
-	return c.filterSelectors(ctx, request, pods, func(Selector) bool { return true })
+	return c.filterSelectors(ctx, request, pods, func(HeaderSelector) bool { return true })
 }
 
-func (c *Controller) filterSelectors(_ context.Context, request *fwksched.InferenceRequest, pods []fwksched.Endpoint, keepSelector func(Selector) bool) []fwksched.Endpoint {
+func (c *Controller) filterSelectors(_ context.Context, request *fwksched.InferenceRequest, pods []fwksched.Endpoint, keepSelector func(HeaderSelector) bool) []fwksched.Endpoint {
 	current := append(make([]fwksched.Endpoint, 0, len(pods)), pods...)
 	if request == nil || len(current) == 0 {
 		return current
 	}
-	for _, selector := range c.config.Selectors {
+	for _, selector := range c.config.HeaderSelectors {
 		if !keepSelector(selector) {
 			continue
 		}
@@ -143,7 +150,7 @@ func (c *Controller) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequ
 	if endpoint == nil || response == nil || response.Headers == nil {
 		return
 	}
-	for _, selector := range c.config.Selectors {
+	for _, selector := range c.config.HeaderSelectors {
 		if value := endpoint.Labels[selector.LabelKey]; value != "" {
 			response.Headers[selector.HeaderName] = value
 			recordHeaderStamped(selector.Name)

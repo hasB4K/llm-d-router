@@ -34,9 +34,9 @@ func WireInto(schedulerConfig *scheduling.SchedulerConfig, requestControlConfig 
 	strictFilter := newModeSelectorsFilter(controller, ModeStrict, strictFilterType)
 	preferFilter := newModeSelectorsFilter(controller, ModePrefer, preferFilterType)
 
-	hasStrict := controller.config.HasSelectorsInMode(ModeStrict)
-	hasPrefer := controller.config.HasSelectorsInMode(ModePrefer)
-	gatingActive := controller.config.Gating.Active()
+	hasStrict := controller.config.HasHeaderSelectorsInMode(ModeStrict)
+	hasPrefer := controller.config.HasHeaderSelectorsInMode(ModePrefer)
+	gatingActive := controller.config.RevisionGating.Active()
 
 	var gating *gatingFilter
 	if gatingActive {

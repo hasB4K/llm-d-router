@@ -82,7 +82,7 @@ func TestMetric_FilterOutcome_NoMatchStrict(t *testing.T) {
 func TestMetric_FilterOutcome_NoMatchPreferFallback(t *testing.T) {
 	resetMetrics(t)
 	config := validConfig()
-	config.Selectors[0].Mode = ModePrefer
+	config.HeaderSelectors[0].Mode = ModePrefer
 	controller := newTestController(config)
 	controller.filter(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
@@ -94,7 +94,7 @@ func TestMetric_FilterOutcome_NoMatchPreferFallback(t *testing.T) {
 	}
 }
 
-// --- Gating dropped -------------------------------------------------------
+// --- RevisionGating dropped -------------------------------------------------------
 
 func TestMetric_GatingDropped_OncePerRevisionPerCall(t *testing.T) {
 	resetMetrics(t)

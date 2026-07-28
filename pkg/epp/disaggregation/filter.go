@@ -17,7 +17,7 @@ type modeSelectorsFilter struct {
 	controller *Controller
 	mode       SelectorMode
 	typedName  fwkplugin.TypedName
-	keepFn     func(Selector) bool
+	keepFn     func(HeaderSelector) bool
 }
 
 var (
@@ -36,7 +36,7 @@ func newModeSelectorsFilter(controller *Controller, mode SelectorMode, typeName 
 		controller: controller,
 		mode:       mode,
 		typedName:  fwkplugin.TypedName{Type: typeName, Name: typeName},
-		keepFn: func(selector Selector) bool {
+		keepFn: func(selector HeaderSelector) bool {
 			return selector.Mode == mode
 		},
 	}
@@ -99,7 +99,7 @@ func newGatingFilter(controller *Controller) *gatingFilter {
 func (f *gatingFilter) TypedName() fwkplugin.TypedName { return f.typedName }
 
 func (f *gatingFilter) Filter(ctx context.Context, request *fwksched.InferenceRequest, pods []fwksched.Endpoint) []fwksched.Endpoint {
-	gating := f.controller.config.Gating
+	gating := f.controller.config.RevisionGating
 	revisionLabelKey := f.controller.revisionLabelKey
 	if !gating.Active() || revisionLabelKey == "" {
 		return append(make([]fwksched.Endpoint, 0, len(pods)), pods...)
@@ -188,7 +188,7 @@ func (f *gatingFilter) hasStrictHeader(request *fwksched.InferenceRequest) bool 
 	if request == nil {
 		return false
 	}
-	for _, selector := range f.controller.config.Selectors {
+	for _, selector := range f.controller.config.HeaderSelectors {
 		if selector.Mode != ModeStrict {
 			continue
 		}

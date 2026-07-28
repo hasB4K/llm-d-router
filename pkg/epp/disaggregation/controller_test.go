@@ -103,7 +103,7 @@ func TestFilter_StrictNoMatchReturnsEmpty(t *testing.T) {
 
 func TestFilter_PreferFallsBack(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors[0].Mode = ModePrefer
+	cfg.HeaderSelectors[0].Mode = ModePrefer
 	c := newTestController(cfg)
 	pods := []fwksched.Endpoint{
 		endpoint("p1", revLabels("v1")),
@@ -131,7 +131,7 @@ func TestFilter_HeaderAbsentIsNoop(t *testing.T) {
 
 func TestFilter_MultipleSelectorsAppliedInOrder(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors = append(cfg.Selectors, Selector{
+	cfg.HeaderSelectors = append(cfg.HeaderSelectors, HeaderSelector{
 		Name:       "slice",
 		HeaderName: "x-disagg-slice",
 		LabelKey:   "mistral.ai/slice",
@@ -169,7 +169,7 @@ func TestFilter_NilRequestIsNoop(t *testing.T) {
 
 func TestFilter_PreferDoesNotRescueAfterStrictEmpties(t *testing.T) {
 	config := validConfig()
-	config.Selectors = append(config.Selectors, Selector{
+	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
 		Name:       "slice",
 		HeaderName: "x-disagg-slice",
 		LabelKey:   "mistral.ai/slice",
@@ -420,7 +420,7 @@ func TestGatingFilter_AllRevisionsDeadReturnsEmpty(t *testing.T) {
 
 func TestGatingFilter_NoGatingConfigIsNoop(t *testing.T) {
 	cfg := validConfig()
-	cfg.Gating = nil
+	cfg.RevisionGating = nil
 	c := newTestController(cfg)
 	f := newGatingFilter(c)
 	pods := []fwksched.Endpoint{
@@ -429,7 +429,7 @@ func TestGatingFilter_NoGatingConfigIsNoop(t *testing.T) {
 	}
 	got := f.Filter(context.Background(), nil, pods)
 	if len(got) != 2 {
-		t.Fatalf("nil Gating → passthrough; got %d", len(got))
+		t.Fatalf("nil RevisionGating → passthrough; got %d", len(got))
 	}
 }
 
@@ -459,7 +459,7 @@ func TestGatingFilter_SkipsWhenRevisionHeaderPresent(t *testing.T) {
 func TestGatingFilter_DropsUncoveredRevisionEvenWhenHeaderPinsIt(t *testing.T) {
 	// Rollout-drift + client hand-pin regression case: v1 has 3 prefill
 	// pods but 0 decode pods (decode-v1 drifted). Client sends prefill
-	// request pinned to v1. Gating's coverage check must still run despite
+	// request pinned to v1. RevisionGating's coverage check must still run despite
 	// the pin — it drops v1 from candidates, downstream strict then finds
 	// zero v1 pods → 503 at prefill (fail-fast).
 	//
@@ -509,7 +509,7 @@ func TestGatingFilter_SkipsWhenSingleRevisionInPool(t *testing.T) {
 
 func TestGatingFilter_DisabledModeIsNoop(t *testing.T) {
 	cfg := validConfig()
-	cfg.Gating.Mode = GatingModeDisabled
+	cfg.RevisionGating.Mode = GatingModeDisabled
 	c := newTestController(cfg)
 	f := newGatingFilter(c)
 	pods := []fwksched.Endpoint{
@@ -536,7 +536,7 @@ func TestResponseHeader_StampsSelectorHeader(t *testing.T) {
 
 func TestResponseHeader_MultipleSelectorsStampAll(t *testing.T) {
 	cfg := validConfig()
-	cfg.Selectors = append(cfg.Selectors, Selector{
+	cfg.HeaderSelectors = append(cfg.HeaderSelectors, HeaderSelector{
 		Name: "slice", HeaderName: "x-disagg-slice",
 		LabelKey: "mistral.ai/slice", Mode: ModeStrict,
 	})
