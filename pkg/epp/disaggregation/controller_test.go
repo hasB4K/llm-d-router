@@ -1,0 +1,352 @@
+/*
+Copyright 2025 The Kubernetes Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package disaggregation
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+
+	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
+	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
+	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
+	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
+	testutils "github.com/llm-d/llm-d-router/test/utils"
+)
+
+const (
+	testRevLabel  = "disaggregatedset.x-k8s.io/revision"
+	testRoleLabel = "disaggregatedset.x-k8s.io/role"
+	testNS        = "default"
+	testSelector  = "disaggregatedset.x-k8s.io/name=my-set"
+)
+
+func readyPod(name, revision, role string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: testNS,
+			Labels: map[string]string{
+				testRevLabel:                     revision,
+				testRoleLabel:                    role,
+				"disaggregatedset.x-k8s.io/name": "my-set",
+			},
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			Conditions: []corev1.PodCondition{
+				{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+}
+
+func newTestController(config Config) *Controller {
+	if err := config.Validate(); err != nil {
+		panic(err)
+	}
+	scope, err := labels.Parse(config.Scope.LabelSelector)
+	if err != nil {
+		panic(err)
+	}
+	return newController("test-router", config, scope)
+}
+
+func endpoint(name string, endpointLabels map[string]string) fwksched.Endpoint {
+	meta := &fwkdl.EndpointMetadata{
+		NamespacedName: types.NamespacedName{Namespace: testNS, Name: name},
+		PodName:        name,
+		Labels:         endpointLabels,
+	}
+	return fwksched.NewEndpoint(meta, &fwkdl.Metrics{}, nil)
+}
+
+func revLabels(revision string) map[string]string {
+	return map[string]string{testRevLabel: revision, testRoleLabel: "prefill"}
+}
+
+func podEvent(t *testing.T, pod *corev1.Pod, eventType fwkdl.EventType) fwkdl.NotificationEvent {
+	t.Helper()
+	object, err := runtime.DefaultUnstructuredConverter.ToUnstructured(pod)
+	if err != nil {
+		t.Fatalf("convert Pod: %v", err)
+	}
+	result := &fwkdl.NotificationEvent{Type: eventType}
+	result.Object = &unstructured.Unstructured{Object: object}
+	result.Object.SetGroupVersionKind(podGVK)
+	return *result
+}
+
+func seedPods(t *testing.T, controller *Controller, pods ...*corev1.Pod) {
+	t.Helper()
+	handler := &podNotificationHandler{controller: controller}
+	for _, pod := range pods {
+		if err := handler.Extract(context.Background(), podEvent(t, pod, fwkdl.EventAddOrUpdate)); err != nil {
+			t.Fatalf("seed pod %s: %v", pod.Name, err)
+		}
+	}
+}
+
+func seedCounts(t *testing.T, controller *Controller, counts map[string]map[string]int) {
+	t.Helper()
+	index := 0
+	for revision, roles := range counts {
+		for role, count := range roles {
+			for range count {
+				index++
+				seedPods(t, controller, readyPod(fmt.Sprintf("%s-%s-%d", revision, role, index), revision, role))
+			}
+		}
+	}
+}
+
+func produceAndFilter(t *testing.T, controller *Controller, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+	t.Helper()
+	if err := controller.Produce(context.Background(), request, endpoints); err != nil {
+		t.Fatalf("Produce: %v", err)
+	}
+	return controller.Filter(context.Background(), request, endpoints)
+}
+
+func TestRouterFactoryAndPodDependency(t *testing.T) {
+	raw, err := json.Marshal(validConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin, err := RouterFactory("revision-router", fwkplugin.StrictDecoder(raw), nil)
+	if err != nil {
+		t.Fatalf("RouterFactory: %v", err)
+	}
+	router := plugin.(*Controller)
+	if router.TypedName() != (fwkplugin.TypedName{Type: RouterType, Name: "revision-router"}) {
+		t.Fatalf("unexpected typed name: %v", router.TypedName())
+	}
+	registrar := &captureRegistrar{}
+	if err := router.RegisterDependencies(registrar); err != nil {
+		t.Fatalf("RegisterDependencies: %v", err)
+	}
+	if len(registrar.registrations) != 1 {
+		t.Fatalf("want one Pod dependency, got %d", len(registrar.registrations))
+	}
+	source, ok := registrar.registrations[0].DefaultSource.(fwkdl.NotificationSource)
+	if !ok || source.GVK() != podGVK {
+		t.Fatalf("dependency is not a Pod notification source: %#v", registrar.registrations[0])
+	}
+}
+
+type captureRegistrar struct {
+	registrations []fwkdl.PendingRegistration
+}
+
+func (r *captureRegistrar) Register(registration fwkdl.PendingRegistration) error {
+	r.registrations = append(r.registrations, registration)
+	return nil
+}
+
+func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
+	controller := newTestController(validConfig())
+	handler := &podNotificationHandler{controller: controller}
+	inScope := readyPod("p1", "v1", "prefill")
+	outOfScope := readyPod("p2", "v2", "decode")
+	outOfScope.Labels["disaggregatedset.x-k8s.io/name"] = "other"
+	notReady := readyPod("p3", "v1", "decode")
+	notReady.Status.Conditions[0].Status = corev1.ConditionFalse
+	for _, pod := range []*corev1.Pod{inScope, outOfScope, notReady} {
+		if err := handler.Extract(context.Background(), podEvent(t, pod, fwkdl.EventAddOrUpdate)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	counts := controller.readyPodsByRevisionRole(map[string]struct{}{testNS: {}})
+	if counts["v1"]["prefill"] != 1 || len(counts) != 1 {
+		t.Fatalf("unexpected counts: %#v", counts)
+	}
+
+	if err := handler.Extract(context.Background(), podEvent(t, inScope, fwkdl.EventDelete)); err != nil {
+		t.Fatal(err)
+	}
+	if got := controller.readyPodsByRevisionRole(map[string]struct{}{testNS: {}}); len(got) != 0 {
+		t.Fatalf("delete did not remove Pod: %#v", got)
+	}
+}
+
+func TestRouterWeightedGatingRunsBeforeStrictFilter(t *testing.T) {
+	controller := newTestController(validConfig())
+	seedCounts(t, controller, map[string]map[string]int{
+		"v1": {"prefill": 3, "decode": 3},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	controller.rand01 = func() float64 { return 0 }
+	candidates := []fwksched.Endpoint{
+		endpoint("v1-p", revLabels("v1")),
+		endpoint("v2-p", revLabels("v2")),
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
+	got := produceAndFilter(t, controller, request, candidates)
+	if len(got) != 1 || got[0].GetMetadata().PodName != "v1-p" {
+		t.Fatalf("want selected v1 endpoint, got %v", got)
+	}
+}
+
+func TestRouterPinnedUncoveredRevisionFailsClosed(t *testing.T) {
+	controller := newTestController(validConfig())
+	seedCounts(t, controller, map[string]map[string]int{
+		"v1": {"prefill": 3},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	controller.rand01 = func() float64 { panic("pinned requests must not choose a revision") }
+	candidates := []fwksched.Endpoint{
+		endpoint("v1-p", revLabels("v1")),
+		endpoint("v2-p", revLabels("v2")),
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}}
+	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+		t.Fatalf("uncovered pinned revision must fail closed, got %v", got)
+	}
+}
+
+func TestRouterSingleRevisionStillChecksCrossRoleCoverage(t *testing.T) {
+	controller := newTestController(validConfig())
+	seedCounts(t, controller, map[string]map[string]int{"v1": {"prefill": 2}})
+	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
+	candidates := []fwksched.Endpoint{endpoint("v1-p", revLabels("v1"))}
+	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+		t.Fatalf("single uncovered revision must be gated, got %v", got)
+	}
+}
+
+func TestRouterFailsClosedUntilPodNotificationsArrive(t *testing.T) {
+	controller := newTestController(validConfig())
+	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
+	candidates := []fwksched.Endpoint{endpoint("v1-p", revLabels("v1"))}
+	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+		t.Fatalf("empty notification state must fail closed, got %v", got)
+	}
+}
+
+func TestRouterWeightedDistribution(t *testing.T) {
+	tests := []struct {
+		name      string
+		counts    map[string]map[string]int
+		wantShare float64
+	}{
+		{"balanced", map[string]map[string]int{"v1": {"prefill": 7, "decode": 7}, "v2": {"prefill": 3, "decode": 3}}, 0.30},
+		{"decode-heavy", map[string]map[string]int{"v1": {"prefill": 2, "decode": 18}, "v2": {"prefill": 1, "decode": 2}}, 3.0 / 23.0},
+		{"prefill-heavy", map[string]map[string]int{"v1": {"prefill": 18, "decode": 2}, "v2": {"prefill": 2, "decode": 1}}, 3.0 / 23.0},
+	}
+	const iterations = 10000
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			controller := newTestController(validConfig())
+			seedCounts(t, controller, test.counts)
+			candidates := candidatePool(test.counts["v1"]["prefill"], test.counts["v2"]["prefill"])
+			v2 := 0
+			for range iterations {
+				request := &fwksched.InferenceRequest{Headers: map[string]string{}}
+				got := produceAndFilter(t, controller, request, candidates)
+				if len(got) == 0 {
+					t.Fatal("empty survivor set")
+				}
+				if got[0].GetMetadata().Labels[testRevLabel] == "v2" {
+					v2++
+				}
+			}
+			share := float64(v2) / iterations
+			if share < test.wantShare-0.03 || share > test.wantShare+0.03 {
+				t.Fatalf("want v2 share %.3f +/- .03, got %.3f", test.wantShare, share)
+			}
+		})
+	}
+}
+
+func candidatePool(v1, v2 int) []fwksched.Endpoint {
+	result := make([]fwksched.Endpoint, 0, v1+v2)
+	for i := range v1 {
+		result = append(result, endpoint("v1-"+strconv.Itoa(i), revLabels("v1")))
+	}
+	for i := range v2 {
+		result = append(result, endpoint("v2-"+strconv.Itoa(i), revLabels("v2")))
+	}
+	return result
+}
+
+func TestStrictSelectors(t *testing.T) {
+	config := validConfig()
+	config.RevisionGating = nil
+	controller := newTestController(config)
+	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
+	got := produceAndFilter(t, controller, request, candidates)
+	if len(got) != 1 || got[0].GetMetadata().PodName != "v2" {
+		t.Fatalf("strict filter mismatch: %v", got)
+	}
+	request.Headers["x-disagg-revision"] = "missing"
+	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+		t.Fatalf("strict no-match must be empty: %v", got)
+	}
+}
+
+func TestPreferFilterMatchesAndFallsBack(t *testing.T) {
+	config := validConfig()
+	config.RevisionGating = nil
+	config.HeaderSelectors[0].Mode = ModePrefer
+	router := newTestController(config)
+	filter := &preferFilter{typedName: fwkplugin.TypedName{Type: PreferFilterType, Name: "prefer"}, router: router}
+	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
+	if got := filter.Filter(context.Background(), request, candidates); len(got) != 1 || got[0].GetMetadata().PodName != "v2" {
+		t.Fatalf("prefer match mismatch: %v", got)
+	}
+	request.Headers["x-disagg-revision"] = "missing"
+	if got := filter.Filter(context.Background(), request, candidates); len(got) != 2 {
+		t.Fatalf("prefer no-match must fall back: %v", got)
+	}
+}
+
+func TestPreferFilterFactoryLinksRouterAndDeclaresDependency(t *testing.T) {
+	config := validConfig()
+	config.HeaderSelectors[0].Mode = ModePrefer
+	router := newTestController(config)
+	handle := testutils.NewTestHandle(context.Background())
+	handle.AddPlugin("test-router", router)
+	raw := json.RawMessage(`{"routerRef":"test-router"}`)
+	plugin, err := PreferFilterFactory("prefer", fwkplugin.StrictDecoder(raw), handle)
+	if err != nil {
+		t.Fatalf("PreferFilterFactory: %v", err)
+	}
+	filter := plugin.(*preferFilter)
+	if _, ok := filter.Consumes().Required[router.decisionKey]; !ok {
+		t.Fatalf("prefer filter does not consume router decision: %#v", filter.Consumes())
+	}
+}
+
+func TestResponseHeaderStampsSelectors(t *testing.T) {
+	controller := newTestController(validConfig())
+	response := &fwkrc.Response{Headers: map[string]string{}}
+	controller.ResponseHeader(context.Background(), nil, response, &fwkdl.EndpointMetadata{Labels: revLabels("v1")})
+	if response.Headers["x-disagg-revision"] != "v1" {
+		t.Fatalf("revision header not stamped: %#v", response.Headers)
+	}
+}

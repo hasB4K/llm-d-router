@@ -53,6 +53,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/config/loader"
 	"github.com/llm-d/llm-d-router/pkg/epp/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/datastore"
+	"github.com/llm-d/llm-d-router/pkg/epp/disaggregation"
 	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol"
 	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/contracts"
 	fccontroller "github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/controller"
@@ -552,6 +553,13 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 
 // registerInTreePlugins registers the factory functions of all known plugins
 func (r *Runner) registerInTreePlugins() {
+	fwkplugin.Register(disaggregation.RouterType, disaggregation.RouterFactory)
+	fwkplugin.RegisterWithPluginDependencies(
+		disaggregation.PreferFilterType,
+		disaggregation.PreferFilterFactory,
+		disaggregation.PreferFilterConfigParser,
+	)
+
 	// bylabel role filters
 	// Beta
 	fwkplugin.Register(bylabel.LabelSelectorFilterType, fwkplugin.StabilityBeta, bylabel.SelectorFactory)
