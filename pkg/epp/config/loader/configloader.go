@@ -34,6 +34,7 @@ import (
 	configapi "github.com/llm-d/llm-d-router/apix/config/v1alpha1"
 	"github.com/llm-d/llm-d-router/pkg/epp/config"
 	"github.com/llm-d/llm-d-router/pkg/epp/datalayer"
+	"github.com/llm-d/llm-d-router/pkg/epp/disaggregation"
 	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkfc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol"
@@ -167,7 +168,7 @@ func InstantiateAndConfigure(
 		return nil, fmt.Errorf("configuration validation failed: %w", err)
 	}
 
-	schedulerConfig, err := buildSchedulerConfig(rawConfig.SchedulingProfiles, handle)
+	schedulerConfig, err := buildSchedulerConfig(rawConfig.SchedulingProfiles, handle, logger)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler config build failed: %w", err)
 	}
@@ -348,12 +349,14 @@ func findPluginDependencies(params any) []string {
 func buildSchedulerConfig(
 	configProfiles []configapi.SchedulingProfile,
 	handle fwkplugin.Handle,
+	logger logr.Logger,
 ) (*scheduling.SchedulerConfig, error) {
 
 	profiles := make(map[string]fwksched.SchedulerProfile)
 
 	for _, cfgProfile := range configProfiles {
 		fwProfile := scheduling.NewSchedulerProfile()
+		filters := make([]fwksched.Filter, 0, len(cfgProfile.Plugins))
 
 		for _, pluginRef := range cfgProfile.Plugins {
 			plugin := handle.Plugin(pluginRef.PluginRef)
@@ -361,6 +364,9 @@ func buildSchedulerConfig(
 				return nil, fmt.Errorf(
 					"plugin '%s' referenced in profile '%s' not found in handle",
 					pluginRef.PluginRef, cfgProfile.Name)
+			}
+			if filter, ok := plugin.(fwksched.Filter); ok {
+				filters = append(filters, filter)
 			}
 
 			// Wrap Scorers with weights.
@@ -376,6 +382,7 @@ func buildSchedulerConfig(
 				return nil, fmt.Errorf("failed to add plugin '%s' to profile '%s': %w", pluginRef.PluginRef, cfgProfile.Name, err)
 			}
 		}
+		warnDisaggregationFilterPositions(logger, cfgProfile.Name, filters)
 		profiles[cfgProfile.Name] = fwProfile
 	}
 
@@ -399,6 +406,22 @@ func buildSchedulerConfig(
 	}
 
 	return scheduling.NewSchedulerConfig(profileHandler, profiles), nil
+}
+
+func warnDisaggregationFilterPositions(logger logr.Logger, profileName string, filters []fwksched.Filter) {
+	for index, filter := range filters {
+		switch {
+		case filter.TypedName().Type == disaggregation.RouterType:
+			router, ok := filter.(*disaggregation.Controller)
+			if ok && router.RequiresFirstFilterPosition() && index != 0 {
+				logger.Info("Disaggregation router should be the first filter",
+					"severity", "warning", "profile", profileName, "plugin", filter.TypedName(), "filterIndex", index)
+			}
+		case filter.TypedName().Type == disaggregation.PreferFilterType && index != len(filters)-1:
+			logger.Info("Disaggregation prefer filter should be the last filter",
+				"severity", "warning", "profile", profileName, "plugin", filter.TypedName(), "filterIndex", index)
+		}
+	}
 }
 
 func loadFeatureConfig(gates configapi.FeatureGates) (map[string]bool, error) {

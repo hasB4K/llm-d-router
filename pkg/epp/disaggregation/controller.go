@@ -140,6 +140,11 @@ func newController(name string, config Config, scope labels.Selector) *Controlle
 
 func (c *Controller) TypedName() fwkplugin.TypedName { return c.typedName }
 
+// RequiresFirstFilterPosition reports whether this router filters candidates.
+func (c *Controller) RequiresFirstFilterPosition() bool {
+	return c.config.RevisionGating.Active() || c.config.HasHeaderSelectorsInMode(ModeStrict)
+}
+
 // Produces declares the per-request revision decision consumed by the prefer
 // filter. The router's own strict Filter reads the same request attribute.
 func (c *Controller) Produces() map[fwkplugin.DataKey]any {
