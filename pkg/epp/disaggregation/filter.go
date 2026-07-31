@@ -40,7 +40,7 @@ func (c *Controller) Produce(_ context.Context, request *fwksched.InferenceReque
 	}
 
 	seenRevisions := uniqueRevisions(endpoints, c.revisionLabelKey)
-	distribution := c.distributionForNamespaces(candidateNamespaces(endpoints, c.config.Scope.Namespace))
+	distribution := c.distributionSnapshot()
 	shares := make(map[string]float64, len(seenRevisions))
 	decision.AllowedRevisions = make(map[string]struct{}, len(seenRevisions))
 	for revision := range seenRevisions {

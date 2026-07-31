@@ -63,7 +63,7 @@ type Config struct {
 // Scope constrains which Pod notifications contribute to revision gating.
 type Scope struct {
 	LabelSelector string `json:"labelSelector"`
-	// Namespace defaults per request to the candidate endpoints' namespace.
+	// Namespace defaults to the router Pod's NAMESPACE environment variable.
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -173,6 +173,9 @@ func (g *RevisionGating) Active() bool {
 func (c *Config) Validate() error {
 	if c.Scope.LabelSelector == "" {
 		return errors.New("scope.labelSelector is required")
+	}
+	if c.Scope.Namespace == "" {
+		return errors.New("scope.namespace is required when NAMESPACE is not set")
 	}
 	if _, err := labels.Parse(c.Scope.LabelSelector); err != nil {
 		return fmt.Errorf("scope.labelSelector is not a valid label selector: %w", err)

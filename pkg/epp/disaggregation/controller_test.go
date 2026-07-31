@@ -158,6 +158,44 @@ func TestRouterFactoryAndPodDependency(t *testing.T) {
 	}
 }
 
+func TestRouterFactoryResolvesScopeNamespace(t *testing.T) {
+	tests := []struct {
+		name        string
+		configured  string
+		environment string
+		want        string
+		wantError   bool
+	}{
+		{name: "router namespace default", environment: "router-system", want: "router-system"},
+		{name: "configured override", configured: "model-serving", environment: "router-system", want: "model-serving"},
+		{name: "unresolved", wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("NAMESPACE", test.environment)
+			config := validConfig()
+			config.Scope.Namespace = test.configured
+			raw, err := json.Marshal(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plugin, err := RouterFactory("revision-router", fwkplugin.StrictDecoder(raw), nil)
+			if test.wantError {
+				if err == nil {
+					t.Fatal("RouterFactory accepted an unresolved scope namespace")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("RouterFactory: %v", err)
+			}
+			if got := plugin.(*Controller).config.Scope.Namespace; got != test.want {
+				t.Fatalf("want namespace %q, got %q", test.want, got)
+			}
+		})
+	}
+}
+
 type captureRegistrar struct {
 	registrations []fwkdl.PendingRegistration
 }
@@ -175,20 +213,22 @@ func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
 	outOfScope.Labels["disaggregatedset.x-k8s.io/name"] = "other"
 	notReady := readyPod("p3", "v1", "decode")
 	notReady.Status.Conditions[0].Status = corev1.ConditionFalse
-	for _, pod := range []*corev1.Pod{inScope, outOfScope, notReady} {
+	outOfNamespace := readyPod("p4", "v1", "decode")
+	outOfNamespace.Namespace = "other"
+	for _, pod := range []*corev1.Pod{inScope, outOfScope, notReady, outOfNamespace} {
 		if err := handler.Extract(context.Background(), podEvent(t, pod, fwkdl.EventAddOrUpdate)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	counts := controller.distributionForNamespaces(map[string]struct{}{testNS: {}}).roleCounts
-	if counts["v1"]["prefill"] != 1 || len(counts) != 1 {
+	counts := controller.distributionSnapshot().roleCounts
+	if counts["v1"]["prefill"] != 1 || len(counts["v1"]) != 1 || len(counts) != 1 {
 		t.Fatalf("unexpected counts: %#v", counts)
 	}
 
 	if err := handler.Extract(context.Background(), podEvent(t, inScope, fwkdl.EventDelete)); err != nil {
 		t.Fatal(err)
 	}
-	if got := controller.distributionForNamespaces(map[string]struct{}{testNS: {}}).roleCounts; len(got) != 0 {
+	if got := controller.distributionSnapshot().roleCounts; len(got) != 0 {
 		t.Fatalf("delete did not remove Pod: %#v", got)
 	}
 }
@@ -205,7 +245,7 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 		readyPod("v2-decode-1", "v2", "decode"),
 	)
 
-	distribution := controller.distributionForNamespaces(map[string]struct{}{testNS: {}})
+	distribution := controller.distributionSnapshot()
 	if math.Abs(distribution.shares["v1"]-2.0/3.0) > 1e-9 || math.Abs(distribution.shares["v2"]-1.0/3.0) > 1e-9 {
 		t.Fatalf("unexpected initial shares: %#v", distribution.shares)
 	}
@@ -216,7 +256,7 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 	if err := handler.Extract(context.Background(), podEvent(t, movedToV2, fwkdl.EventAddOrUpdate)); err != nil {
 		t.Fatal(err)
 	}
-	distribution = controller.distributionForNamespaces(map[string]struct{}{testNS: {}})
+	distribution = controller.distributionSnapshot()
 	if math.Abs(distribution.shares["v1"]-1.0/2.0) > 1e-9 || math.Abs(distribution.shares["v2"]-1.0/2.0) > 1e-9 {
 		t.Fatalf("shares retained stale Pod labels: %#v", distribution.shares)
 	}
@@ -226,7 +266,7 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 	if err := handler.Extract(context.Background(), podEvent(t, notReady, fwkdl.EventAddOrUpdate)); err != nil {
 		t.Fatal(err)
 	}
-	distribution = controller.distributionForNamespaces(map[string]struct{}{testNS: {}})
+	distribution = controller.distributionSnapshot()
 	if math.Abs(distribution.shares["v1"]-3.0/5.0) > 1e-9 || math.Abs(distribution.shares["v2"]-2.0/5.0) > 1e-9 {
 		t.Fatalf("shares were not refreshed: %#v", distribution.shares)
 	}

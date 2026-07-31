@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -62,10 +63,9 @@ type Controller struct {
 	decisionKey      fwkplugin.DataKey
 	rand01           func() float64
 
-	mu              sync.RWMutex
-	pods            map[types.NamespacedName]podInfo
-	distributions   map[string]revisionDistribution
-	allDistribution revisionDistribution
+	mu           sync.RWMutex
+	pods         map[types.NamespacedName]podInfo
+	distribution revisionDistribution
 }
 
 type podInfo struct {
@@ -105,6 +105,9 @@ func RouterFactory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (f
 	if err := parameters.Decode(&config); err != nil {
 		return nil, fmt.Errorf("decode disaggregation-router parameters: %w", err)
 	}
+	if config.Scope.Namespace == "" {
+		config.Scope.Namespace = os.Getenv("NAMESPACE")
+	}
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -132,7 +135,6 @@ func newController(name string, config Config, scope labels.Selector) *Controlle
 		decisionKey:      fwkplugin.NewDataKey(revisionDecisionDataType, name),
 		rand01:           rand.Float64,
 		pods:             make(map[types.NamespacedName]podInfo),
-		distributions:    make(map[string]revisionDistribution),
 	}
 }
 
@@ -207,7 +209,7 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 		revision: pod.Labels[h.controller.revisionLabelKey],
 		role:     pod.Labels[h.controller.roleLabelKey],
 	}
-	h.controller.rebuildDistributionsLocked()
+	h.controller.rebuildDistributionLocked()
 	h.controller.mu.Unlock()
 	return nil
 }
@@ -216,7 +218,7 @@ func (c *Controller) acceptsPod(pod *corev1.Pod) bool {
 	if pod == nil || !c.config.RevisionGating.Active() {
 		return false
 	}
-	if c.config.Scope.Namespace != "" && pod.Namespace != c.config.Scope.Namespace {
+	if pod.Namespace != c.config.Scope.Namespace {
 		return false
 	}
 	if !c.scope.Matches(labels.Set(pod.Labels)) || !isPodReady(pod) {
@@ -228,31 +230,20 @@ func (c *Controller) acceptsPod(pod *corev1.Pod) bool {
 func (c *Controller) removePod(key types.NamespacedName) {
 	c.mu.Lock()
 	delete(c.pods, key)
-	c.rebuildDistributionsLocked()
+	c.rebuildDistributionLocked()
 	c.mu.Unlock()
 }
 
-func (c *Controller) rebuildDistributionsLocked() {
-	requiredRoles := []string(nil)
+func (c *Controller) rebuildDistributionLocked() {
+	var requiredRoles []string
 	if c.config.RevisionGating.Active() {
 		requiredRoles = c.config.RevisionGating.RequireRoles.Values
 	}
-	countsByNamespace := make(map[string]map[string]map[string]int)
-	allCounts := make(map[string]map[string]int)
-	for key, pod := range c.pods {
-		if countsByNamespace[key.Namespace] == nil {
-			countsByNamespace[key.Namespace] = make(map[string]map[string]int)
-		}
-		incrementRoleCount(countsByNamespace[key.Namespace], pod)
-		incrementRoleCount(allCounts, pod)
+	roleCounts := make(map[string]map[string]int)
+	for _, pod := range c.pods {
+		incrementRoleCount(roleCounts, pod)
 	}
-
-	distributions := make(map[string]revisionDistribution, len(countsByNamespace))
-	for namespace, counts := range countsByNamespace {
-		distributions[namespace] = newRevisionDistribution(counts, requiredRoles)
-	}
-	c.distributions = distributions
-	c.allDistribution = newRevisionDistribution(allCounts, requiredRoles)
+	c.distribution = newRevisionDistribution(roleCounts, requiredRoles)
 }
 
 func incrementRoleCount(counts map[string]map[string]int, pod podInfo) {
@@ -283,47 +274,10 @@ func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles
 	return revisionDistribution{roleCounts: roleCounts, shares: shares}
 }
 
-func (c *Controller) distributionForNamespaces(namespaces map[string]struct{}) revisionDistribution {
+func (c *Controller) distributionSnapshot() revisionDistribution {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	if len(namespaces) == 0 {
-		return c.allDistribution
-	}
-	if len(namespaces) == 1 {
-		for namespace := range namespaces {
-			return c.distributions[namespace]
-		}
-	}
-
-	counts := make(map[string]map[string]int)
-	for namespace := range namespaces {
-		for revision, perRole := range c.distributions[namespace].roleCounts {
-			if counts[revision] == nil {
-				counts[revision] = make(map[string]int)
-			}
-			for role, count := range perRole {
-				counts[revision][role] += count
-			}
-		}
-	}
-	return newRevisionDistribution(counts, c.config.RevisionGating.RequireRoles.Values)
-}
-
-func candidateNamespaces(endpoints []fwksched.Endpoint, configured string) map[string]struct{} {
-	result := make(map[string]struct{})
-	if configured != "" {
-		result[configured] = struct{}{}
-		return result
-	}
-	for _, endpoint := range endpoints {
-		if endpoint == nil || endpoint.GetMetadata() == nil {
-			continue
-		}
-		if namespace := endpoint.GetMetadata().NamespacedName.Namespace; namespace != "" {
-			result[namespace] = struct{}{}
-		}
-	}
-	return result
+	return c.distribution
 }
 
 func isPodReady(pod *corev1.Pod) bool {

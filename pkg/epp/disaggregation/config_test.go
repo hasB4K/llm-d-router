@@ -26,6 +26,7 @@ func validConfig() Config {
 	return Config{
 		Scope: Scope{
 			LabelSelector: "disaggregatedset.x-k8s.io/name=my-set",
+			Namespace:     testNS,
 		},
 		HeaderSelectors: []HeaderSelector{
 			{
@@ -55,6 +56,12 @@ func TestValidate_MissingScopeSelector(t *testing.T) {
 	cfg := validConfig()
 	cfg.Scope.LabelSelector = ""
 	assertValidateError(t, cfg, "scope.labelSelector")
+}
+
+func TestValidate_MissingScopeNamespace(t *testing.T) {
+	cfg := validConfig()
+	cfg.Scope.Namespace = ""
+	assertValidateError(t, cfg, "scope.namespace")
 }
 
 func TestValidate_UnparsableScopeSelector(t *testing.T) {
