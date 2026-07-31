@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"testing"
 
@@ -179,7 +180,7 @@ func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	counts := controller.readyPodsByRevisionRole(map[string]struct{}{testNS: {}})
+	counts := controller.distributionForNamespaces(map[string]struct{}{testNS: {}}).roleCounts
 	if counts["v1"]["prefill"] != 1 || len(counts) != 1 {
 		t.Fatalf("unexpected counts: %#v", counts)
 	}
@@ -187,8 +188,47 @@ func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
 	if err := handler.Extract(context.Background(), podEvent(t, inScope, fwkdl.EventDelete)); err != nil {
 		t.Fatal(err)
 	}
-	if got := controller.readyPodsByRevisionRole(map[string]struct{}{testNS: {}}); len(got) != 0 {
+	if got := controller.distributionForNamespaces(map[string]struct{}{testNS: {}}).roleCounts; len(got) != 0 {
 		t.Fatalf("delete did not remove Pod: %#v", got)
+	}
+}
+
+func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
+	controller := newTestController(validConfig())
+	v1Decode := readyPod("v1-decode-1", "v1", "decode")
+	seedPods(t, controller,
+		readyPod("v1-prefill-1", "v1", "prefill"),
+		readyPod("v1-prefill-2", "v1", "prefill"),
+		v1Decode,
+		readyPod("v1-decode-2", "v1", "decode"),
+		readyPod("v2-prefill-1", "v2", "prefill"),
+		readyPod("v2-decode-1", "v2", "decode"),
+	)
+
+	distribution := controller.distributionForNamespaces(map[string]struct{}{testNS: {}})
+	if math.Abs(distribution.shares["v1"]-2.0/3.0) > 1e-9 || math.Abs(distribution.shares["v2"]-1.0/3.0) > 1e-9 {
+		t.Fatalf("unexpected initial shares: %#v", distribution.shares)
+	}
+
+	handler := &podNotificationHandler{controller: controller}
+	movedToV2 := v1Decode.DeepCopy()
+	movedToV2.Labels[testRevLabel] = "v2"
+	if err := handler.Extract(context.Background(), podEvent(t, movedToV2, fwkdl.EventAddOrUpdate)); err != nil {
+		t.Fatal(err)
+	}
+	distribution = controller.distributionForNamespaces(map[string]struct{}{testNS: {}})
+	if math.Abs(distribution.shares["v1"]-1.0/2.0) > 1e-9 || math.Abs(distribution.shares["v2"]-1.0/2.0) > 1e-9 {
+		t.Fatalf("shares retained stale Pod labels: %#v", distribution.shares)
+	}
+
+	notReady := movedToV2.DeepCopy()
+	notReady.Status.Conditions[0].Status = corev1.ConditionFalse
+	if err := handler.Extract(context.Background(), podEvent(t, notReady, fwkdl.EventAddOrUpdate)); err != nil {
+		t.Fatal(err)
+	}
+	distribution = controller.distributionForNamespaces(map[string]struct{}{testNS: {}})
+	if math.Abs(distribution.shares["v1"]-3.0/5.0) > 1e-9 || math.Abs(distribution.shares["v2"]-2.0/5.0) > 1e-9 {
+		t.Fatalf("shares were not refreshed: %#v", distribution.shares)
 	}
 }
 

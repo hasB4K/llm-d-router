@@ -62,13 +62,20 @@ type Controller struct {
 	decisionKey      fwkplugin.DataKey
 	rand01           func() float64
 
-	mu   sync.RWMutex
-	pods map[types.NamespacedName]podInfo
+	mu              sync.RWMutex
+	pods            map[types.NamespacedName]podInfo
+	distributions   map[string]revisionDistribution
+	allDistribution revisionDistribution
 }
 
 type podInfo struct {
 	revision string
 	role     string
+}
+
+type revisionDistribution struct {
+	roleCounts map[string]map[string]int
+	shares     map[string]float64
 }
 
 type revisionDecision struct {
@@ -125,6 +132,7 @@ func newController(name string, config Config, scope labels.Selector) *Controlle
 		decisionKey:      fwkplugin.NewDataKey(revisionDecisionDataType, name),
 		rand01:           rand.Float64,
 		pods:             make(map[types.NamespacedName]podInfo),
+		distributions:    make(map[string]revisionDistribution),
 	}
 }
 
@@ -187,7 +195,7 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 
 	pod := &corev1.Pod{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(event.Object.Object, pod); err != nil {
-		return fmt.Errorf("decode Pod notification %s: %w", key, err)
+		return fmt.Errorf("convert Pod notification %s: %w", key, err)
 	}
 	if !h.controller.acceptsPod(pod) {
 		h.controller.removePod(key)
@@ -199,6 +207,7 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 		revision: pod.Labels[h.controller.revisionLabelKey],
 		role:     pod.Labels[h.controller.roleLabelKey],
 	}
+	h.controller.rebuildDistributionsLocked()
 	h.controller.mu.Unlock()
 	return nil
 }
@@ -219,25 +228,85 @@ func (c *Controller) acceptsPod(pod *corev1.Pod) bool {
 func (c *Controller) removePod(key types.NamespacedName) {
 	c.mu.Lock()
 	delete(c.pods, key)
+	c.rebuildDistributionsLocked()
 	c.mu.Unlock()
 }
 
-func (c *Controller) readyPodsByRevisionRole(namespaces map[string]struct{}) map[string]map[string]int {
-	counts := make(map[string]map[string]int)
+func (c *Controller) rebuildDistributionsLocked() {
+	requiredRoles := []string(nil)
+	if c.config.RevisionGating.Active() {
+		requiredRoles = c.config.RevisionGating.RequireRoles.Values
+	}
+	countsByNamespace := make(map[string]map[string]map[string]int)
+	allCounts := make(map[string]map[string]int)
+	for key, pod := range c.pods {
+		if countsByNamespace[key.Namespace] == nil {
+			countsByNamespace[key.Namespace] = make(map[string]map[string]int)
+		}
+		incrementRoleCount(countsByNamespace[key.Namespace], pod)
+		incrementRoleCount(allCounts, pod)
+	}
+
+	distributions := make(map[string]revisionDistribution, len(countsByNamespace))
+	for namespace, counts := range countsByNamespace {
+		distributions[namespace] = newRevisionDistribution(counts, requiredRoles)
+	}
+	c.distributions = distributions
+	c.allDistribution = newRevisionDistribution(allCounts, requiredRoles)
+}
+
+func incrementRoleCount(counts map[string]map[string]int, pod podInfo) {
+	if counts[pod.revision] == nil {
+		counts[pod.revision] = make(map[string]int)
+	}
+	counts[pod.revision][pod.role]++
+}
+
+func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles []string) revisionDistribution {
+	weights := make(map[string]int, len(roleCounts))
+	total := 0
+	for revision, perRole := range roleCounts {
+		weight := crossRoleWeight(perRole, requiredRoles)
+		if weight == 0 {
+			continue
+		}
+		weights[revision] = weight
+		total += weight
+	}
+
+	shares := make(map[string]float64, len(weights))
+	if total > 0 {
+		for revision, weight := range weights {
+			shares[revision] = float64(weight) / float64(total)
+		}
+	}
+	return revisionDistribution{roleCounts: roleCounts, shares: shares}
+}
+
+func (c *Controller) distributionForNamespaces(namespaces map[string]struct{}) revisionDistribution {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	for key, pod := range c.pods {
-		if len(namespaces) > 0 {
-			if _, allowed := namespaces[key.Namespace]; !allowed {
-				continue
+	if len(namespaces) == 0 {
+		return c.allDistribution
+	}
+	if len(namespaces) == 1 {
+		for namespace := range namespaces {
+			return c.distributions[namespace]
+		}
+	}
+
+	counts := make(map[string]map[string]int)
+	for namespace := range namespaces {
+		for revision, perRole := range c.distributions[namespace].roleCounts {
+			if counts[revision] == nil {
+				counts[revision] = make(map[string]int)
+			}
+			for role, count := range perRole {
+				counts[revision][role] += count
 			}
 		}
-		if counts[pod.revision] == nil {
-			counts[pod.revision] = make(map[string]int)
-		}
-		counts[pod.revision][pod.role]++
 	}
-	return counts
+	return newRevisionDistribution(counts, c.config.RevisionGating.RequireRoles.Values)
 }
 
 func candidateNamespaces(endpoints []fwksched.Endpoint, configured string) map[string]struct{} {

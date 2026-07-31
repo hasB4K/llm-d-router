@@ -40,21 +40,20 @@ func (c *Controller) Produce(_ context.Context, request *fwksched.InferenceReque
 	}
 
 	seenRevisions := uniqueRevisions(endpoints, c.revisionLabelKey)
-	roleCounts := c.readyPodsByRevisionRole(candidateNamespaces(endpoints, c.config.Scope.Namespace))
-	requiredRoles := c.config.RevisionGating.RequireRoles.Values
-	weights := make(map[string]int, len(seenRevisions))
+	distribution := c.distributionForNamespaces(candidateNamespaces(endpoints, c.config.Scope.Namespace))
+	shares := make(map[string]float64, len(seenRevisions))
 	decision.AllowedRevisions = make(map[string]struct{}, len(seenRevisions))
 	for revision := range seenRevisions {
-		weight := crossRoleWeight(roleCounts[revision], requiredRoles)
-		if weight == 0 {
+		share := distribution.shares[revision]
+		if share == 0 {
 			recordGatingDropped(revision)
 			continue
 		}
-		weights[revision] = weight
+		shares[revision] = share
 		decision.AllowedRevisions[revision] = struct{}{}
 	}
 	if !c.hasStrictHeader(request) {
-		decision.ChosenRevision = c.pickWeightedRevision(weights)
+		decision.ChosenRevision = c.pickWeightedRevision(shares)
 	}
 	request.PutAttribute(c.decisionKey.String(), decision)
 	return nil
@@ -178,12 +177,12 @@ func crossRoleWeight(perRole map[string]int, required []string) int {
 	return total
 }
 
-func (c *Controller) pickWeightedRevision(weights map[string]int) string {
-	revisions := make([]string, 0, len(weights))
-	total := 0
-	for revision, weight := range weights {
+func (c *Controller) pickWeightedRevision(shares map[string]float64) string {
+	revisions := make([]string, 0, len(shares))
+	total := 0.0
+	for revision, share := range shares {
 		revisions = append(revisions, revision)
-		total += weight
+		total += share
 	}
 	if total == 0 {
 		return ""
@@ -192,10 +191,10 @@ func (c *Controller) pickWeightedRevision(weights map[string]int) string {
 	if len(revisions) == 1 {
 		return revisions[0]
 	}
-	x := c.rand01() * float64(total)
+	x := c.rand01() * total
 	cumulative := 0.0
 	for _, revision := range revisions {
-		cumulative += float64(weights[revision])
+		cumulative += shares[revision]
 		if x < cumulative {
 			return revision
 		}
