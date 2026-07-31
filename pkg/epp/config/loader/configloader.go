@@ -382,7 +382,9 @@ func buildSchedulerConfig(
 				return nil, fmt.Errorf("failed to add plugin '%s' to profile '%s': %w", pluginRef.PluginRef, cfgProfile.Name, err)
 			}
 		}
-		warnDisaggregationFilterPositions(logger, cfgProfile.Name, filters)
+		if err := validateDisaggregationFilterPositions(logger, cfgProfile.Name, filters); err != nil {
+			return nil, err
+		}
 		profiles[cfgProfile.Name] = fwProfile
 	}
 
@@ -408,20 +410,20 @@ func buildSchedulerConfig(
 	return scheduling.NewSchedulerConfig(profileHandler, profiles), nil
 }
 
-func warnDisaggregationFilterPositions(logger logr.Logger, profileName string, filters []fwksched.Filter) {
+func validateDisaggregationFilterPositions(logger logr.Logger, profileName string, filters []fwksched.Filter) error {
 	for index, filter := range filters {
 		switch {
 		case filter.TypedName().Type == disaggregation.RouterType:
 			router, ok := filter.(*disaggregation.Controller)
 			if ok && router.RequiresFirstFilterPosition() && index != 0 {
-				logger.Info("Disaggregation router should be the first filter",
-					"severity", "warning", "profile", profileName, "plugin", filter.TypedName(), "filterIndex", index)
+				return fmt.Errorf("disaggregation router '%s' must be the first filter in profile '%s'", filter.TypedName(), profileName)
 			}
 		case filter.TypedName().Type == disaggregation.PreferFilterType && index != len(filters)-1:
 			logger.Info("Disaggregation prefer filter should be the last filter",
 				"severity", "warning", "profile", profileName, "plugin", filter.TypedName(), "filterIndex", index)
 		}
 	}
+	return nil
 }
 
 func loadFeatureConfig(gates configapi.FeatureGates) (map[string]bool, error) {
