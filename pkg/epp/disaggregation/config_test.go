@@ -185,6 +185,16 @@ func TestValidate_GatingSumWithoutRequireRoles(t *testing.T) {
 	assertValidateError(t, cfg, "revisionGating.requireRoles is required")
 }
 
+func TestValidate_GatingMaxRole(t *testing.T) {
+	cfg := validConfig()
+	cfg.RevisionGating.Mode = GatingModeMaxRole
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("gating.mode=max-role should validate: %v", err)
+	}
+	cfg.RevisionGating.RequireRoles = nil
+	assertValidateError(t, cfg, "revisionGating.requireRoles is required")
+}
+
 func TestValidate_GatingDisabledSkipsSubValidation(t *testing.T) {
 	// mode=disabled is a legitimate way to keep the block for documentation
 	// while turning the filter off; the sub-block does not need to be set.
@@ -207,6 +217,14 @@ func TestGating_Active(t *testing.T) {
 	sumMissingSub := &RevisionGating{Mode: GatingModeSum}
 	if sumMissingSub.Active() {
 		t.Errorf("mode=sum without requireRoles should not be active")
+	}
+	maxRole := &RevisionGating{Mode: GatingModeMaxRole, RequireRoles: &RequireRoles{Values: []string{"r"}}}
+	if !maxRole.Active() {
+		t.Errorf("mode=max-role with requireRoles should be active")
+	}
+	maxRoleMissingSub := &RevisionGating{Mode: GatingModeMaxRole}
+	if maxRoleMissingSub.Active() {
+		t.Errorf("mode=max-role without requireRoles should not be active")
 	}
 	disabled := &RevisionGating{Mode: GatingModeDisabled, RequireRoles: &RequireRoles{Values: []string{"r"}}}
 	if disabled.Active() {

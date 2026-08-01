@@ -241,14 +241,16 @@ func (c *Controller) removePod(key types.NamespacedName) {
 
 func (c *Controller) rebuildDistributionLocked() {
 	var requiredRoles []string
+	var mode GatingMode
 	if c.config.RevisionGating.Active() {
 		requiredRoles = c.config.RevisionGating.RequireRoles.Values
+		mode = c.config.RevisionGating.Mode
 	}
 	roleCounts := make(map[string]map[string]int)
 	for _, pod := range c.pods {
 		incrementRoleCount(roleCounts, pod)
 	}
-	c.distribution = newRevisionDistribution(roleCounts, requiredRoles)
+	c.distribution = newRevisionDistribution(roleCounts, requiredRoles, mode)
 }
 
 func incrementRoleCount(counts map[string]map[string]int, pod podInfo) {
@@ -258,11 +260,11 @@ func incrementRoleCount(counts map[string]map[string]int, pod podInfo) {
 	counts[pod.revision][pod.role]++
 }
 
-func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles []string) revisionDistribution {
+func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles []string, mode GatingMode) revisionDistribution {
 	weights := make(map[string]int, len(roleCounts))
 	total := 0
 	for revision, perRole := range roleCounts {
-		weight := crossRoleWeight(perRole, requiredRoles)
+		weight := revisionWeight(perRole, requiredRoles, mode)
 		if weight == 0 {
 			continue
 		}

@@ -272,6 +272,42 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 	}
 }
 
+func TestRevisionWeightModesAndCoverage(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   GatingMode
+		counts map[string]int
+		want   int
+	}{
+		{name: "sum", mode: GatingModeSum, counts: map[string]int{"prefill": 2, "decode": 8}, want: 10},
+		{name: "max role", mode: GatingModeMaxRole, counts: map[string]int{"prefill": 2, "decode": 8}, want: 8},
+		{name: "sum requires every role", mode: GatingModeSum, counts: map[string]int{"decode": 8}, want: 0},
+		{name: "max role requires every role", mode: GatingModeMaxRole, counts: map[string]int{"decode": 8}, want: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := revisionWeight(test.counts, []string{"prefill", "decode"}, test.mode); got != test.want {
+				t.Fatalf("revisionWeight() = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestMaxRoleCachesRevisionShares(t *testing.T) {
+	config := validConfig()
+	config.RevisionGating.Mode = GatingModeMaxRole
+	controller := newTestController(config)
+	seedCounts(t, controller, map[string]map[string]int{
+		"v1": {"prefill": 2, "decode": 8},
+		"v2": {"prefill": 1, "decode": 2},
+	})
+
+	shares := controller.distributionSnapshot().shares
+	if math.Abs(shares["v1"]-0.8) > 1e-9 || math.Abs(shares["v2"]-0.2) > 1e-9 {
+		t.Fatalf("unexpected max-role shares: %#v", shares)
+	}
+}
+
 func TestRouterWeightedGatingRunsBeforeStrictFilter(t *testing.T) {
 	controller := newTestController(validConfig())
 	seedCounts(t, controller, map[string]map[string]int{

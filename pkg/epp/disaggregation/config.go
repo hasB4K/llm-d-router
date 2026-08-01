@@ -109,10 +109,8 @@ const (
 // RevisionGating governs the revision-axis gating filter. Two things happen
 // per request when Active:
 //
-//  1. Coverage check: drop candidates whose revision fails the current
-//     mode's liveness check. For GatingModeSum, that means "any role
-//     listed in RequireRoles.Values has zero Ready pods for this
-//     revision" means the revision is dropped.
+//  1. Coverage check: drop candidates whose revision has zero Ready pods
+//     for any role listed in RequireRoles.Values.
 //  2. Load shaping: when no strict header is present, weighted-random-pick
 //     ONE surviving revision and keep only its pods.
 //
@@ -132,7 +130,7 @@ type RevisionGating struct {
 type GatingMode string
 
 const (
-	// GatingModeSum does two things per Filter call:
+	// GatingModeSum does two things:
 	//   1. Drop any revision missing Ready pods on any listed role
 	//      (rollout drift safety).
 	//   2. Weighted-random-pick ONE surviving revision, weighted by the
@@ -142,15 +140,18 @@ const (
 	// revisions), independent of the picker downstream. The "sum" name
 	// refers to the per-revision sum used as weight.
 	GatingModeSum GatingMode = "sum"
+	// GatingModeMaxRole applies the same coverage check as GatingModeSum, then
+	// uses the largest Ready pod count among the required roles as each covered
+	// revision's weight.
+	GatingModeMaxRole GatingMode = "max-role"
 	// GatingModeDisabled turns off revision gating while preserving any
 	// configured header selectors.
 	GatingModeDisabled GatingMode = "disabled"
 )
 
-// RequireRoles is the sub-config for GatingModeSum: the list of roles that
-// must each have at least one Ready pod on a revision for that revision's
-// candidates to survive the filter. The label key that identifies a pod's
-// role is RevisionGating.RoleLabelKey (parent scope).
+// RequireRoles lists the roles that must each have at least one Ready pod on a
+// revision for that revision's candidates to survive the filter. The label key
+// that identifies a pod's role is RevisionGating.RoleLabelKey (parent scope).
 type RequireRoles struct {
 	Values []string `json:"values"`
 }
@@ -161,7 +162,7 @@ func (g *RevisionGating) Active() bool {
 		return false
 	}
 	switch g.Mode {
-	case GatingModeSum:
+	case GatingModeSum, GatingModeMaxRole:
 		return g.RequireRoles != nil
 	case GatingModeDisabled:
 		return false
@@ -219,9 +220,9 @@ func (c *Config) Validate() error {
 		switch c.RevisionGating.Mode {
 		case GatingModeDisabled:
 			// Nothing else to validate: disabled skips wiring.
-		case GatingModeSum:
+		case GatingModeSum, GatingModeMaxRole:
 			if c.RevisionGating.RequireRoles == nil {
-				return errors.New("revisionGating.requireRoles is required when revisionGating.mode=sum")
+				return fmt.Errorf("revisionGating.requireRoles is required when revisionGating.mode=%s", c.RevisionGating.Mode)
 			}
 			if len(c.RevisionGating.RequireRoles.Values) == 0 {
 				return errors.New("revisionGating.requireRoles.values must contain at least one role")
@@ -237,7 +238,7 @@ func (c *Config) Validate() error {
 				seenRoles[role] = struct{}{}
 			}
 		default:
-			return fmt.Errorf("revisionGating.mode %q must be one of sum|disabled", c.RevisionGating.Mode)
+			return fmt.Errorf("revisionGating.mode %q must be one of sum|max-role|disabled", c.RevisionGating.Mode)
 		}
 	}
 

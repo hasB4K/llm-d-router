@@ -165,16 +165,27 @@ func uniqueRevisions(endpoints []fwksched.Endpoint, revisionLabelKey string) map
 	return seen
 }
 
-func crossRoleWeight(perRole map[string]int, required []string) int {
-	total := 0
+func revisionWeight(perRole map[string]int, required []string, mode GatingMode) int {
+	sum := 0
+	maxRole := 0
 	for _, role := range required {
 		count := perRole[role]
 		if count == 0 {
 			return 0
 		}
-		total += count
+		sum += count
+		if count > maxRole {
+			maxRole = count
+		}
 	}
-	return total
+	switch mode {
+	case GatingModeSum:
+		return sum
+	case GatingModeMaxRole:
+		return maxRole
+	default:
+		return 0
+	}
 }
 
 func (c *Controller) pickWeightedRevision(shares map[string]float64) string {
