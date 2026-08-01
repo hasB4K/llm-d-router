@@ -27,7 +27,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	k8stypes "k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
@@ -234,10 +233,6 @@ func (h *testHandle) GetAllPluginsWithNames() map[string]plugin.Plugin {
 }
 
 func (h *testHandle) Metrics() plugin.MetricsRecorder {
-	return nil
-}
-
-func (h *testHandle) Manager() ctrl.Manager {
 	return nil
 }
 

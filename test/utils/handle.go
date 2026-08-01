@@ -21,7 +21,6 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 )
@@ -44,11 +43,6 @@ func (h *testHandle) PodList() []types.NamespacedName {
 
 func (h *testHandle) Metrics() plugin.MetricsRecorder {
 	return h.metricsRecorder
-}
-
-// Manager returns nil — tests that need a Manager should use NewTestRunnerSetup.
-func (h *testHandle) Manager() ctrl.Manager {
-	return nil
 }
 
 type testHandlePlugins struct {
