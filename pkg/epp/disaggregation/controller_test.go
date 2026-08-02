@@ -293,18 +293,80 @@ func TestRevisionWeightModesAndCoverage(t *testing.T) {
 	}
 }
 
-func TestMaxRoleCachesRevisionShares(t *testing.T) {
-	config := validConfig()
-	config.RevisionGating.Mode = GatingModeMaxRole
-	controller := newTestController(config)
-	seedCounts(t, controller, map[string]map[string]int{
-		"v1": {"prefill": 2, "decode": 8},
-		"v2": {"prefill": 1, "decode": 2},
-	})
+func TestRevisionModesCacheExpectedShares(t *testing.T) {
+	tests := []struct {
+		name   string
+		mode   GatingMode
+		counts map[string]map[string]int
+		wantV2 float64
+	}{
+		{
+			name: "2p10d sum",
+			mode: GatingModeSum,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 2, "decode": 8},
+				"v2": {"prefill": 1, "decode": 2},
+			},
+			wantV2: 3.0 / 13.0,
+		},
+		{
+			name: "2p10d max role",
+			mode: GatingModeMaxRole,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 2, "decode": 8},
+				"v2": {"prefill": 1, "decode": 2},
+			},
+			wantV2: 2.0 / 10.0,
+		},
+		{
+			name: "10p10d sum",
+			mode: GatingModeSum,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 8, "decode": 8},
+				"v2": {"prefill": 2, "decode": 2},
+			},
+			wantV2: 2.0 / 10.0,
+		},
+		{
+			name: "10p10d max role",
+			mode: GatingModeMaxRole,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 8, "decode": 8},
+				"v2": {"prefill": 2, "decode": 2},
+			},
+			wantV2: 2.0 / 10.0,
+		},
+		{
+			name: "10p2d sum",
+			mode: GatingModeSum,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 8, "decode": 2},
+				"v2": {"prefill": 2, "decode": 1},
+			},
+			wantV2: 3.0 / 13.0,
+		},
+		{
+			name: "10p2d max role",
+			mode: GatingModeMaxRole,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 8, "decode": 2},
+				"v2": {"prefill": 2, "decode": 1},
+			},
+			wantV2: 2.0 / 10.0,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := validConfig()
+			config.RevisionGating.Mode = test.mode
+			controller := newTestController(config)
+			seedCounts(t, controller, test.counts)
 
-	shares := controller.distributionSnapshot().shares
-	if math.Abs(shares["v1"]-0.8) > 1e-9 || math.Abs(shares["v2"]-0.2) > 1e-9 {
-		t.Fatalf("unexpected max-role shares: %#v", shares)
+			shares := controller.distributionSnapshot().shares
+			if math.Abs(shares["v2"]-test.wantV2) > 1e-9 || math.Abs(shares["v1"]-(1-test.wantV2)) > 1e-9 {
+				t.Fatalf("unexpected shares: %#v", shares)
+			}
+		})
 	}
 }
 
@@ -365,17 +427,23 @@ func TestRouterFailsClosedUntilPodNotificationsArrive(t *testing.T) {
 func TestRouterWeightedDistribution(t *testing.T) {
 	tests := []struct {
 		name      string
+		mode      GatingMode
 		counts    map[string]map[string]int
 		wantShare float64
 	}{
-		{"balanced", map[string]map[string]int{"v1": {"prefill": 7, "decode": 7}, "v2": {"prefill": 3, "decode": 3}}, 0.30},
-		{"decode-heavy", map[string]map[string]int{"v1": {"prefill": 2, "decode": 18}, "v2": {"prefill": 1, "decode": 2}}, 3.0 / 23.0},
-		{"prefill-heavy", map[string]map[string]int{"v1": {"prefill": 18, "decode": 2}, "v2": {"prefill": 2, "decode": 1}}, 3.0 / 23.0},
+		{"2p10d sum", GatingModeSum, map[string]map[string]int{"v1": {"prefill": 2, "decode": 8}, "v2": {"prefill": 1, "decode": 2}}, 3.0 / 13.0},
+		{"2p10d max role", GatingModeMaxRole, map[string]map[string]int{"v1": {"prefill": 2, "decode": 8}, "v2": {"prefill": 1, "decode": 2}}, 2.0 / 10.0},
+		{"10p10d sum", GatingModeSum, map[string]map[string]int{"v1": {"prefill": 8, "decode": 8}, "v2": {"prefill": 2, "decode": 2}}, 2.0 / 10.0},
+		{"10p10d max role", GatingModeMaxRole, map[string]map[string]int{"v1": {"prefill": 8, "decode": 8}, "v2": {"prefill": 2, "decode": 2}}, 2.0 / 10.0},
+		{"10p2d sum", GatingModeSum, map[string]map[string]int{"v1": {"prefill": 8, "decode": 2}, "v2": {"prefill": 2, "decode": 1}}, 3.0 / 13.0},
+		{"10p2d max role", GatingModeMaxRole, map[string]map[string]int{"v1": {"prefill": 8, "decode": 2}, "v2": {"prefill": 2, "decode": 1}}, 2.0 / 10.0},
 	}
 	const iterations = 10000
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			controller := newTestController(validConfig())
+			config := validConfig()
+			config.RevisionGating.Mode = test.mode
+			controller := newTestController(config)
 			seedCounts(t, controller, test.counts)
 			candidates := candidatePool(test.counts["v1"]["prefill"], test.counts["v2"]["prefill"])
 			v2 := 0
