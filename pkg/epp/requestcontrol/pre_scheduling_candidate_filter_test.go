@@ -57,7 +57,7 @@ func TestConfigAddPluginsCollectsPreSchedulingCandidateFilters(t *testing.T) {
 
 	require.Len(t, config.preSchedulingCandidateFilters, 1)
 	assert.Same(t, filter, config.preSchedulingCandidateFilters[0])
-	var _ fwkrc.PreSchedulingCandidateFilter = config.preSchedulingCandidateFilters[0]
+	var _ fwkrc.PreSchedulingCandidateFilter = filter
 }
 
 func TestRunPreSchedulingCandidateFiltersIntersectsIndependentSubsets(t *testing.T) {
