@@ -553,9 +553,10 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 
 // registerInTreePlugins registers the factory functions of all known plugins
 func (r *Runner) registerInTreePlugins() {
-	fwkplugin.Register(disaggregation.RouterType, disaggregation.RouterFactory)
+	fwkplugin.Register(disaggregation.RouterType, fwkplugin.StabilityAlpha, disaggregation.RouterFactory)
 	fwkplugin.RegisterWithPluginDependencies(
 		disaggregation.PreferScorerType,
+		fwkplugin.StabilityAlpha,
 		disaggregation.PreferScorerFactory,
 		disaggregation.PreferScorerConfigParser,
 	)
