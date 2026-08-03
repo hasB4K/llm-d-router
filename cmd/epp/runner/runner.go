@@ -555,9 +555,9 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(disaggregation.RouterType, disaggregation.RouterFactory)
 	fwkplugin.RegisterWithPluginDependencies(
-		disaggregation.PreferFilterType,
-		disaggregation.PreferFilterFactory,
-		disaggregation.PreferFilterConfigParser,
+		disaggregation.PreferScorerType,
+		disaggregation.PreferScorerFactory,
+		disaggregation.PreferScorerConfigParser,
 	)
 
 	// bylabel role filters

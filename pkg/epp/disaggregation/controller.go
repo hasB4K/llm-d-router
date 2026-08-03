@@ -42,25 +42,22 @@ const (
 	// RouterType is the plugin type for revision gating, strict header
 	// filtering, and response-header stamping.
 	RouterType = "disaggregation-router"
-	// PreferFilterType is the plugin type for the tail-positioned prefer filter.
-	PreferFilterType = "disaggregation-prefer-filter"
+	// PreferScorerType is the plugin type for soft header-label affinity.
+	PreferScorerType = "disaggregation-prefer-scorer"
 
-	revisionDecisionDataType = "disaggregation-revision-decision"
-	podExtractorType         = "disaggregation-pod-extractor"
+	podExtractorType = "disaggregation-pod-extractor"
 )
 
 var podGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
 
-// Controller is a normal framework plugin. The request-control pipeline runs
-// Produce before scheduling; Filter then applies that decision before strict
-// selectors. ResponseHeader stamps the selected endpoint's labels.
+// Controller gates revisions and applies strict selectors before scheduling.
+// ResponseHeader stamps the selected endpoint's labels.
 type Controller struct {
 	typedName        fwkplugin.TypedName
 	config           Config
 	scope            labels.Selector
 	revisionLabelKey string
 	roleLabelKey     string
-	decisionKey      fwkplugin.DataKey
 	rand01           func() float64
 
 	mu           sync.RWMutex
@@ -78,16 +75,9 @@ type revisionDistribution struct {
 	shares     map[string]float64
 }
 
-type revisionDecision struct {
-	GatingActive     bool
-	AllowedRevisions map[string]struct{}
-	ChosenRevision   string
-}
-
 var (
 	_ fwkplugin.Plugin              = (*Controller)(nil)
-	_ fwkrc.DataProducer            = (*Controller)(nil)
-	_ fwksched.Filter               = (*Controller)(nil)
+	_ fwkrc.Screener                = (*Controller)(nil)
 	_ fwkrc.ResponseHeaderProcessor = (*Controller)(nil)
 	_ fwkdl.Registrant              = (*Controller)(nil)
 	_ fwkdl.NotificationExtractor   = (*podNotificationHandler)(nil)
@@ -132,24 +122,12 @@ func newController(name string, config Config, scope labels.Selector) *Controlle
 		scope:            scope,
 		revisionLabelKey: revisionLabelKey,
 		roleLabelKey:     roleLabelKey,
-		decisionKey:      fwkplugin.NewDataKey(revisionDecisionDataType, name),
 		rand01:           rand.Float64,
 		pods:             make(map[types.NamespacedName]podInfo),
 	}
 }
 
 func (c *Controller) TypedName() fwkplugin.TypedName { return c.typedName }
-
-// RequiresFirstFilterPosition reports whether this router filters candidates.
-func (c *Controller) RequiresFirstFilterPosition() bool {
-	return c.config.RevisionGating.Active() || c.config.HasHeaderSelectorsInMode(ModeStrict)
-}
-
-// Produces declares the per-request revision decision consumed by the prefer
-// filter. The router's own strict Filter reads the same request attribute.
-func (c *Controller) Produces() map[fwkplugin.DataKey]any {
-	return map[fwkplugin.DataKey]any{c.decisionKey: revisionDecision{}}
-}
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
 // source. No controller-runtime Manager or Kubernetes client enters the plugin.

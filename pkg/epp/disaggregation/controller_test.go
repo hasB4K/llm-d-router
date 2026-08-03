@@ -124,12 +124,9 @@ func seedCounts(t *testing.T, controller *Controller, counts map[string]map[stri
 	}
 }
 
-func produceAndFilter(t *testing.T, controller *Controller, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+func screenCandidates(t *testing.T, controller *Controller, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	t.Helper()
-	if err := controller.Produce(context.Background(), request, endpoints); err != nil {
-		t.Fatalf("Produce: %v", err)
-	}
-	return controller.Filter(context.Background(), request, endpoints)
+	return controller.Screen(context.Background(), request, endpoints)
 }
 
 func TestRouterFactoryAndPodDependency(t *testing.T) {
@@ -142,6 +139,7 @@ func TestRouterFactoryAndPodDependency(t *testing.T) {
 		t.Fatalf("RouterFactory: %v", err)
 	}
 	router := plugin.(*Controller)
+	var _ fwkrc.Screener = router
 	if router.TypedName() != (fwkplugin.TypedName{Type: RouterType, Name: "revision-router"}) {
 		t.Fatalf("unexpected typed name: %v", router.TypedName())
 	}
@@ -382,8 +380,8 @@ func TestRouterWeightedGatingRunsBeforeStrictFilter(t *testing.T) {
 		endpoint("v2-p", revLabels("v2")),
 	}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-	got := produceAndFilter(t, controller, request, candidates)
-	if len(got) != 1 || got[0].GetMetadata().PodName != "v1-p" {
+	got := screenCandidates(t, controller, request, candidates)
+	if len(got) != 1 || got[0].GetMetadata().Name != "v1-p" {
 		t.Fatalf("want selected v1 endpoint, got %v", got)
 	}
 }
@@ -400,7 +398,7 @@ func TestRouterPinnedUncoveredRevisionFailsClosed(t *testing.T) {
 		endpoint("v2-p", revLabels("v2")),
 	}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}}
-	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
 		t.Fatalf("uncovered pinned revision must fail closed, got %v", got)
 	}
 }
@@ -410,7 +408,7 @@ func TestRouterSingleRevisionStillChecksCrossRoleCoverage(t *testing.T) {
 	seedCounts(t, controller, map[string]map[string]int{"v1": {"prefill": 2}})
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
 	candidates := []fwksched.Endpoint{endpoint("v1-p", revLabels("v1"))}
-	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
 		t.Fatalf("single uncovered revision must be gated, got %v", got)
 	}
 }
@@ -419,7 +417,7 @@ func TestRouterFailsClosedUntilPodNotificationsArrive(t *testing.T) {
 	controller := newTestController(validConfig())
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
 	candidates := []fwksched.Endpoint{endpoint("v1-p", revLabels("v1"))}
-	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
 		t.Fatalf("empty notification state must fail closed, got %v", got)
 	}
 }
@@ -449,7 +447,7 @@ func TestRouterWeightedDistribution(t *testing.T) {
 			v2 := 0
 			for range iterations {
 				request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-				got := produceAndFilter(t, controller, request, candidates)
+				got := screenCandidates(t, controller, request, candidates)
 				if len(got) == 0 {
 					t.Fatal("empty survivor set")
 				}
@@ -482,47 +480,78 @@ func TestStrictSelectors(t *testing.T) {
 	controller := newTestController(config)
 	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
-	got := produceAndFilter(t, controller, request, candidates)
-	if len(got) != 1 || got[0].GetMetadata().PodName != "v2" {
+	got := screenCandidates(t, controller, request, candidates)
+	if len(got) != 1 || got[0].GetMetadata().Name != "v2" {
 		t.Fatalf("strict filter mismatch: %v", got)
 	}
 	request.Headers["x-disagg-revision"] = "missing"
-	if got := produceAndFilter(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
 		t.Fatalf("strict no-match must be empty: %v", got)
 	}
 }
 
-func TestPreferFilterMatchesAndFallsBack(t *testing.T) {
+func TestPreferScorerScoresMatchesWithoutRemovingCandidates(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = nil
 	config.HeaderSelectors[0].Mode = ModePrefer
 	router := newTestController(config)
-	filter := &preferFilter{typedName: fwkplugin.TypedName{Type: PreferFilterType, Name: "prefer"}, router: router}
+	scorer := &preferScorer{typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: "prefer"}, router: router}
 	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
-	if got := filter.Filter(context.Background(), request, candidates); len(got) != 1 || got[0].GetMetadata().PodName != "v2" {
-		t.Fatalf("prefer match mismatch: %v", got)
+	scores := scorer.Score(context.Background(), request, candidates)
+	if scores[candidates[0]] != 0 || scores[candidates[1]] != 1 {
+		t.Fatalf("unexpected prefer scores: %v", scores)
 	}
 	request.Headers["x-disagg-revision"] = "missing"
-	if got := filter.Filter(context.Background(), request, candidates); len(got) != 2 {
-		t.Fatalf("prefer no-match must fall back: %v", got)
+	scores = scorer.Score(context.Background(), request, candidates)
+	if len(scores) != len(candidates) || scores[candidates[0]] != 0 || scores[candidates[1]] != 0 {
+		t.Fatalf("no-match must leave every candidate at zero: %v", scores)
+	}
+	if scorer.Category() != fwksched.Affinity {
+		t.Fatalf("prefer scorer category = %q, want %q", scorer.Category(), fwksched.Affinity)
 	}
 }
 
-func TestPreferFilterFactoryLinksRouterAndDeclaresDependency(t *testing.T) {
+func TestPreferScorerAveragesMultipleSelectors(t *testing.T) {
+	config := validConfig()
+	config.RevisionGating = nil
+	config.HeaderSelectors[0].Mode = ModePrefer
+	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
+		Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "llm-d.ai/slice", Mode: ModePrefer,
+	})
+	router := newTestController(config)
+	scorer := &preferScorer{typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: "prefer"}, router: router}
+	candidates := []fwksched.Endpoint{
+		endpoint("both", map[string]string{testRevLabel: "v2", "llm-d.ai/slice": "s2"}),
+		endpoint("revision", map[string]string{testRevLabel: "v2", "llm-d.ai/slice": "s1"}),
+		endpoint("neither", map[string]string{testRevLabel: "v1", "llm-d.ai/slice": "s1"}),
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{
+		"x-disagg-revision": "v2",
+		"x-disagg-slice":    "s2",
+	}}
+
+	scores := scorer.Score(context.Background(), request, candidates)
+
+	if scores[candidates[0]] != 1 || scores[candidates[1]] != 0.5 || scores[candidates[2]] != 0 {
+		t.Fatalf("unexpected multi-selector scores: %v", scores)
+	}
+}
+
+func TestPreferScorerFactoryLinksRouter(t *testing.T) {
 	config := validConfig()
 	config.HeaderSelectors[0].Mode = ModePrefer
 	router := newTestController(config)
 	handle := testutils.NewTestHandle(context.Background())
 	handle.AddPlugin("test-router", router)
 	raw := json.RawMessage(`{"routerRef":"test-router"}`)
-	plugin, err := PreferFilterFactory("prefer", fwkplugin.StrictDecoder(raw), handle)
+	plugin, err := PreferScorerFactory("prefer", fwkplugin.StrictDecoder(raw), handle)
 	if err != nil {
-		t.Fatalf("PreferFilterFactory: %v", err)
+		t.Fatalf("PreferScorerFactory: %v", err)
 	}
-	filter := plugin.(*preferFilter)
-	if _, ok := filter.Consumes().Required[router.decisionKey]; !ok {
-		t.Fatalf("prefer filter does not consume router decision: %#v", filter.Consumes())
+	scorer := plugin.(*preferScorer)
+	if scorer.router != router {
+		t.Fatal("prefer scorer did not retain its router reference")
 	}
 }
 

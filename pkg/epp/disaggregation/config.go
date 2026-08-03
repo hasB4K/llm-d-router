@@ -31,10 +31,9 @@ limitations under the License.
 //     collapse the candidate pool to a single revision.
 //
 // The router plugin observes Pods through the data layer's Kubernetes
-// notification source. It produces a revision decision before scheduling,
-// applies that decision and strict selectors as a scheduling filter, and
-// stamps response headers. A prefer-filter plugin references the router and
-// applies prefer selectors at the end of a scheduling profile.
+// notification source, applies gating and strict selectors before scheduling,
+// and stamps response headers. A prefer scorer references the router and adds
+// soft affinity scores within a scheduling profile.
 package disaggregation
 
 import (
@@ -90,8 +89,7 @@ func (s *HeaderSelector) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// SelectorMode governs filter behaviour when the header carries a value with
-// no matching candidates.
+// SelectorMode selects strict candidate filtering or soft affinity scoring.
 type SelectorMode string
 
 const (
@@ -100,13 +98,12 @@ const (
 	// the client asked for something specific and we do not silently
 	// substitute.
 	ModeStrict SelectorMode = "strict"
-	// ModePrefer: no match falls back to the unfiltered candidate set.
-	// (Escape-hatch semantics, not a spectrum; when at least one candidate
-	// matches, ModePrefer behaves identically to ModeStrict.)
+	// ModePrefer gives matching candidates a soft affinity score. Non-matching
+	// candidates remain eligible for selection.
 	ModePrefer SelectorMode = "prefer"
 )
 
-// RevisionGating governs the revision-axis gating filter. Two things happen
+// RevisionGating governs revision-axis candidate filtering. Two things happen
 // per request when Active:
 //
 //  1. Coverage check: drop candidates whose revision has zero Ready pods

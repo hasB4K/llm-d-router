@@ -74,10 +74,9 @@ func TestMetric_FilterOutcome_Matched(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = nil
 	controller := newTestController(config)
-	controller.filterSelectors(context.Background(),
+	controller.filterStrictSelectors(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
-		ModeStrict,
 	)
 	got := testutil.ToFloat64(filterOutcomeTotal.WithLabelValues("revision", string(ModeStrict), filterOutcomeMatched))
 	if got != 1 {
@@ -90,10 +89,9 @@ func TestMetric_FilterOutcome_NoMatchStrict(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = nil
 	controller := newTestController(config)
-	controller.filterSelectors(context.Background(),
+	controller.filterStrictSelectors(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
-		ModeStrict,
 	)
 	got := testutil.ToFloat64(filterOutcomeTotal.WithLabelValues("revision", string(ModeStrict), filterOutcomeNoMatchStrict))
 	if got != 1 {
@@ -107,10 +105,10 @@ func TestMetric_FilterOutcome_NoMatchPreferFallback(t *testing.T) {
 	config.RevisionGating = nil
 	config.HeaderSelectors[0].Mode = ModePrefer
 	controller := newTestController(config)
-	controller.filterSelectors(context.Background(),
+	scorer := &preferScorer{router: controller}
+	scorer.Score(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
-		ModePrefer,
 	)
 	got := testutil.ToFloat64(filterOutcomeTotal.WithLabelValues("revision", string(ModePrefer), filterOutcomeNoMatchPreferFallback))
 	if got != 1 {
@@ -138,9 +136,7 @@ func TestMetric_GatingDropped_OncePerRevisionPerCall(t *testing.T) {
 	}
 
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-	if err := controller.Produce(context.Background(), request, pods); err != nil {
-		t.Fatalf("Produce: %v", err)
-	}
+	controller.Screen(context.Background(), request, pods)
 
 	// Three v1 endpoints hit the gate in one call. The counter should read 1,
 	// not 3.

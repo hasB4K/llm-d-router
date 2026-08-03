@@ -44,7 +44,7 @@ var (
 		prometheus.CounterOpts{
 			Subsystem: metricsSubsystem,
 			Name:      metricsPrefix + "_filter_outcome_total",
-			Help:      "Per-selector filter outcomes: matched, no_match_strict, no_match_prefer_fallback.",
+			Help:      "Per-selector outcomes: matched, no_match_strict, no_match_prefer_fallback.",
 		},
 		[]string{"selector", "mode", "outcome"},
 	)
@@ -78,15 +78,15 @@ func registerMetrics() {
 // on every request that doesn't opt in, so the counter would balloon with
 // near-zero-signal increments.
 const (
-	// filterOutcomeMatched: header matched at least one candidate; survivor
-	// set narrowed to the intersection. Fires for both strict and prefer.
+	// filterOutcomeMatched: header matched at least one candidate. Strict mode
+	// narrows the set; prefer mode gives matches a soft affinity score.
 	filterOutcomeMatched = "matched"
 	// filterOutcomeNoMatchStrict: strict-mode header matched zero candidates;
 	// survivor set became empty and the framework will return 503. This is
 	// the "no fallback" case operators alert on.
 	filterOutcomeNoMatchStrict = "no_match_strict"
 	// filterOutcomeNoMatchPreferFallback: prefer-mode header matched zero
-	// candidates; survivor set kept unchanged (fallback engaged). Not an
+	// candidates, so every candidate receives the same zero affinity. Not an
 	// error and is expected during rollouts before the client updates its header.
 	filterOutcomeNoMatchPreferFallback = "no_match_prefer_fallback"
 )

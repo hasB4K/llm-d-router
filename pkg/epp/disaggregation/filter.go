@@ -27,69 +27,54 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-// Produce computes revision coverage and load shaping before any scheduling
-// profile runs. Filter applies the resulting decision to the candidate slice.
-func (c *Controller) Produce(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) error {
-	if request == nil {
-		return nil
-	}
-	decision := revisionDecision{GatingActive: c.config.RevisionGating.Active()}
-	if !decision.GatingActive {
-		request.PutAttribute(c.decisionKey.String(), decision)
-		return nil
-	}
-
-	seenRevisions := uniqueRevisions(endpoints, c.revisionLabelKey)
-	distribution := c.distributionSnapshot()
-	shares := make(map[string]float64, len(seenRevisions))
-	decision.AllowedRevisions = make(map[string]struct{}, len(seenRevisions))
-	for revision := range seenRevisions {
-		share := distribution.shares[revision]
-		if share == 0 {
-			recordGatingDropped(revision)
-			continue
-		}
-		shares[revision] = share
-		decision.AllowedRevisions[revision] = struct{}{}
-	}
-	if !c.hasStrictHeader(request) {
-		decision.ChosenRevision = c.pickWeightedRevision(shares)
-	}
-	request.PutAttribute(c.decisionKey.String(), decision)
-	return nil
-}
-
-// Filter applies the producer's revision decision and then all strict header
-// selectors. Configure this plugin as the first filter in each profile.
-func (c *Controller) Filter(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+// Screen applies revision gating and strict selectors before scheduling
+// profiles observe the endpoint set.
+func (c *Controller) Screen(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	current := append(make([]fwksched.Endpoint, 0, len(endpoints)), endpoints...)
 	if c.config.RevisionGating.Active() {
 		if request == nil {
 			return nil
 		}
-		decision, ok := fwksched.ReadRequestAttribute[revisionDecision](request, c.decisionKey.String())
-		if !ok || !decision.GatingActive {
-			return nil
+		seenRevisions := uniqueRevisions(current, c.revisionLabelKey)
+		distribution := c.distributionSnapshot()
+		shares := make(map[string]float64, len(seenRevisions))
+		allowedRevisions := make(map[string]struct{}, len(seenRevisions))
+		for revision := range seenRevisions {
+			share := distribution.shares[revision]
+			if share == 0 {
+				recordGatingDropped(revision)
+				continue
+			}
+			shares[revision] = share
+			allowedRevisions[revision] = struct{}{}
 		}
-		current = c.applyRevisionDecision(current, decision)
+		chosenRevision := ""
+		if !c.hasStrictHeader(request) {
+			chosenRevision = c.pickWeightedRevision(shares)
+		}
+		current = c.applyRevisionDecision(current, allowedRevisions, chosenRevision)
 		if len(current) == 0 {
 			return nil
 		}
 	}
-	return c.filterSelectors(ctx, request, current, ModeStrict)
+	return c.filterStrictSelectors(ctx, request, current)
 }
 
-func (c *Controller) applyRevisionDecision(endpoints []fwksched.Endpoint, decision revisionDecision) []fwksched.Endpoint {
+func (c *Controller) applyRevisionDecision(
+	endpoints []fwksched.Endpoint,
+	allowedRevisions map[string]struct{},
+	chosenRevision string,
+) []fwksched.Endpoint {
 	result := make([]fwksched.Endpoint, 0, len(endpoints))
 	for _, endpoint := range endpoints {
 		if endpoint == nil || endpoint.GetMetadata() == nil {
 			continue
 		}
 		revision := endpoint.GetMetadata().Labels[c.revisionLabelKey]
-		if _, covered := decision.AllowedRevisions[revision]; !covered {
+		if _, covered := allowedRevisions[revision]; !covered {
 			continue
 		}
-		if decision.ChosenRevision != "" && revision != decision.ChosenRevision {
+		if chosenRevision != "" && revision != chosenRevision {
 			continue
 		}
 		result = append(result, endpoint)
@@ -97,13 +82,13 @@ func (c *Controller) applyRevisionDecision(endpoints []fwksched.Endpoint, decisi
 	return result
 }
 
-func (c *Controller) filterSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint, mode SelectorMode) []fwksched.Endpoint {
+func (c *Controller) filterStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	current := append(make([]fwksched.Endpoint, 0, len(endpoints)), endpoints...)
 	if request == nil || len(current) == 0 {
 		return current
 	}
 	for _, selector := range c.config.HeaderSelectors {
-		if selector.Mode != mode {
+		if selector.Mode != ModeStrict {
 			continue
 		}
 		requested := request.Headers[selector.HeaderName]
@@ -119,19 +104,11 @@ func (c *Controller) filterSelectors(_ context.Context, request *fwksched.Infere
 				matched = append(matched, endpoint)
 			}
 		}
-		switch {
-		case mode == ModeStrict:
-			current = matched
-			if len(matched) == 0 {
-				recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeNoMatchStrict)
-			} else {
-				recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeMatched)
-			}
-		case len(matched) > 0:
-			current = matched
+		current = matched
+		if len(matched) == 0 {
+			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeNoMatchStrict)
+		} else {
 			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeMatched)
-		default:
-			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeNoMatchPreferFallback)
 		}
 		if len(current) == 0 {
 			return current
@@ -206,18 +183,18 @@ func (c *Controller) pickWeightedRevision(shares map[string]float64) string {
 	return revisions[len(revisions)-1]
 }
 
-type preferFilterParameters struct {
+type preferScorerParameters struct {
 	RouterRef string `json:"routerRef" pluginRef:""`
 }
 
-// PreferFilterConfigParser exposes routerRef to the plugin dependency loader.
-func PreferFilterConfigParser(parameters *json.Decoder, _ fwkplugin.Handle) (any, error) {
-	config := preferFilterParameters{}
+// PreferScorerConfigParser exposes routerRef to the plugin dependency loader.
+func PreferScorerConfigParser(parameters *json.Decoder, _ fwkplugin.Handle) (any, error) {
+	config := preferScorerParameters{}
 	if parameters == nil {
-		return nil, errors.New("disaggregation-prefer-filter requires parameters")
+		return nil, errors.New("disaggregation-prefer-scorer requires parameters")
 	}
 	if err := parameters.Decode(&config); err != nil {
-		return nil, fmt.Errorf("decode disaggregation-prefer-filter parameters: %w", err)
+		return nil, fmt.Errorf("decode disaggregation-prefer-scorer parameters: %w", err)
 	}
 	if config.RouterRef == "" {
 		return nil, errors.New("routerRef is required")
@@ -225,14 +202,14 @@ func PreferFilterConfigParser(parameters *json.Decoder, _ fwkplugin.Handle) (any
 	return config, nil
 }
 
-// PreferFilterFactory creates a tail filter sharing the referenced router's
-// configuration and per-request decision dependency.
-func PreferFilterFactory(name string, parameters *json.Decoder, handle fwkplugin.Handle) (fwkplugin.Plugin, error) {
-	parsed, err := PreferFilterConfigParser(parameters, handle)
+// PreferScorerFactory creates a soft-affinity scorer using the referenced
+// router's prefer selectors.
+func PreferScorerFactory(name string, parameters *json.Decoder, handle fwkplugin.Handle) (fwkplugin.Plugin, error) {
+	parsed, err := PreferScorerConfigParser(parameters, handle)
 	if err != nil {
 		return nil, err
 	}
-	config := parsed.(preferFilterParameters)
+	config := parsed.(preferScorerParameters)
 	plugin := handle.Plugin(config.RouterRef)
 	router, ok := plugin.(*Controller)
 	if !ok {
@@ -242,32 +219,64 @@ func PreferFilterFactory(name string, parameters *json.Decoder, handle fwkplugin
 		return nil, fmt.Errorf("routerRef %q has no prefer-mode header selectors", config.RouterRef)
 	}
 	if name == "" {
-		name = PreferFilterType
+		name = PreferScorerType
 	}
-	return &preferFilter{
-		typedName: fwkplugin.TypedName{Type: PreferFilterType, Name: name},
+	return &preferScorer{
+		typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: name},
 		router:    router,
 	}, nil
 }
 
-type preferFilter struct {
+type preferScorer struct {
 	typedName fwkplugin.TypedName
 	router    *Controller
 }
 
-var (
-	_ fwksched.Filter          = (*preferFilter)(nil)
-	_ fwkplugin.ConsumerPlugin = (*preferFilter)(nil)
-)
+var _ fwksched.Scorer = (*preferScorer)(nil)
 
-func (f *preferFilter) TypedName() fwkplugin.TypedName { return f.typedName }
+func (s *preferScorer) TypedName() fwkplugin.TypedName { return s.typedName }
 
-func (f *preferFilter) Consumes() fwkplugin.DataDependencies {
-	return fwkplugin.DataDependencies{
-		Required: map[fwkplugin.DataKey]any{f.router.decisionKey: revisionDecision{}},
+func (s *preferScorer) Category() fwksched.ScorerCategory { return fwksched.Affinity }
+
+func (s *preferScorer) Score(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) map[fwksched.Endpoint]float64 {
+	scores := make(map[fwksched.Endpoint]float64, len(endpoints))
+	for _, endpoint := range endpoints {
+		scores[endpoint] = 0
 	}
-}
+	if request == nil {
+		return scores
+	}
 
-func (f *preferFilter) Filter(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
-	return f.router.filterSelectors(ctx, request, endpoints, ModePrefer)
+	activeSelectors := 0
+	for _, selector := range s.router.config.HeaderSelectors {
+		if selector.Mode != ModePrefer {
+			continue
+		}
+		requested := request.Headers[selector.HeaderName]
+		if requested == "" {
+			continue
+		}
+		activeSelectors++
+		matched := false
+		for _, endpoint := range endpoints {
+			if endpoint == nil || endpoint.GetMetadata() == nil {
+				continue
+			}
+			if endpoint.GetMetadata().Labels[selector.LabelKey] == requested {
+				scores[endpoint]++
+				matched = true
+			}
+		}
+		if matched {
+			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeMatched)
+		} else {
+			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeNoMatchPreferFallback)
+		}
+	}
+	if activeSelectors > 1 {
+		for endpoint := range scores {
+			scores[endpoint] /= float64(activeSelectors)
+		}
+	}
+	return scores
 }
