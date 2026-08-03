@@ -60,16 +60,21 @@ The design enables:
 
 See the upstream [Request Scheduler](https://github.com/llm-d/llm-d/blob/main/docs/architecture/core/router/epp/scheduling.md) doc for the canonical scheduling model.
 
-1. **Filtering**
+1. **Pre-scheduling candidate filtering**
+   - Global `PreSchedulingCandidateFilter` plugins receive the same located endpoint set
+   - Their returned subsets are intersected before data producers and scheduling profiles run
+   - Use this stage for mandatory routing constraints that every profile must observe
+
+2. **Filtering**
    - Pods in an `InferencePool` go through a sequential chain of filters
    - Pods may be excluded based on criteria like model compatibility, resource usage, or custom logic
 
-2. **Scoring**
+3. **Scoring**
    - Filtered pods are scored using a weighted set of scorers
    - Scorers currently run sequentially (future: parallel execution)
    - Scorers access a shared datastore populated by the data layer
 
-3. **Pod Selection**
+4. **Pod Selection**
    - The highest-scored pod is selected
    - If multiple pods share the same score, one is selected at random
 

@@ -26,14 +26,23 @@ import (
 )
 
 const (
-	RequestHeaderExtensionPoint     = "RequestHeader"
-	AdmissionExtensionPoint         = "Admission"
-	DataProducerExtensionPoint      = "DataProducer"
-	PreRequestExtensionPoint        = "PreRequest"
-	ResponseReceivedExtensionPoint  = "ResponseReceived"
-	ResponseStreamingExtensionPoint = "ResponseStreaming"
-	ResponseCompleteExtensionPoint  = "ResponseComplete"
+	RequestHeaderExtensionPoint                = "RequestHeader"
+	PreSchedulingCandidateFilterExtensionPoint = "PreSchedulingCandidateFilter"
+	AdmissionExtensionPoint                    = "Admission"
+	DataProducerExtensionPoint                 = "DataProducer"
+	PreRequestExtensionPoint                   = "PreRequest"
+	ResponseReceivedExtensionPoint             = "ResponseReceived"
+	ResponseStreamingExtensionPoint            = "ResponseStreaming"
+	ResponseCompleteExtensionPoint             = "ResponseComplete"
 )
+
+// PreSchedulingCandidateFilter returns a subset of the located endpoints before
+// data production, admission, and scheduling profiles run. Every filter sees
+// the same input set, and the framework intersects their results.
+type PreSchedulingCandidateFilter interface {
+	plugin.Plugin
+	FilterCandidates(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint
+}
 
 // PreRequest is called by the director after a getting result from scheduling layer and
 // before a request is sent to the selected model server.

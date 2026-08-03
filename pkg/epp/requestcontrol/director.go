@@ -305,6 +305,13 @@ func (d *Director) HandleRequest(ctx context.Context, reqCtx *handlers.RequestCo
 	}
 
 	snapshotOfCandidatePods := d.toSchedulerEndpoints(endpointCandidates)
+	snapshotOfCandidatePods = d.runPreSchedulingCandidateFilters(ctx, reqCtx.SchedulingRequest, snapshotOfCandidatePods)
+	if len(snapshotOfCandidatePods) == 0 {
+		return reqCtx, errcommon.Error{
+			Code: errcommon.ServiceUnavailable,
+			Msg:  "pre-scheduling candidate filters eliminated all endpoint candidates",
+		}
+	}
 	// Prepare per request data by running DataProducer plugins.
 	err = d.runDataProducerPlugins(ctx, reqCtx.SchedulingRequest, snapshotOfCandidatePods)
 	if err != nil {
@@ -641,6 +648,33 @@ func (d *Director) runDataProducerPlugins(ctx context.Context,
 		}
 	}
 	return nil
+}
+
+func (d *Director) runPreSchedulingCandidateFilters(ctx context.Context,
+	request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+	loggerDebug := log.FromContext(ctx).V(logutil.DEBUG)
+	filteredEndpoints := endpoints
+	for _, plugin := range d.requestControlPlugins.preSchedulingCandidateFilters {
+		loggerDebug.Info("Running PreSchedulingCandidateFilter plugin", "plugin", plugin.TypedName())
+		before := time.Now()
+		pluginEndpoints := plugin.FilterCandidates(ctx, request, endpoints)
+		metrics.RecordPluginProcessingLatency(fwkrc.PreSchedulingCandidateFilterExtensionPoint,
+			plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
+		allowed := make(map[fwksched.Endpoint]struct{}, len(pluginEndpoints))
+		for _, endpoint := range pluginEndpoints {
+			allowed[endpoint] = struct{}{}
+		}
+		intersection := make([]fwksched.Endpoint, 0, min(len(filteredEndpoints), len(allowed)))
+		for _, endpoint := range filteredEndpoints {
+			if _, ok := allowed[endpoint]; ok {
+				intersection = append(intersection, endpoint)
+			}
+		}
+		filteredEndpoints = intersection
+		loggerDebug.Info("Completed running PreSchedulingCandidateFilter plugin successfully",
+			"plugin", plugin.TypedName(), "remainingEndpoints", len(filteredEndpoints))
+	}
+	return filteredEndpoints
 }
 
 func (d *Director) runAdmissionPlugins(ctx context.Context,
