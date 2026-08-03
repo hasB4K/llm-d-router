@@ -264,7 +264,7 @@ func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles
 	weights := make(map[string]int, len(roleCounts))
 	total := 0
 	for revision, perRole := range roleCounts {
-		weight := revisionWeight(perRole, requiredRoles, mode)
+		weight := revisionWeight(perRole, requiredRoles, mode == GatingModeMaxRole)
 		if weight == 0 {
 			continue
 		}

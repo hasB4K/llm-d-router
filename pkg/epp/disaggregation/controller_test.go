@@ -274,19 +274,19 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 
 func TestRevisionWeightModesAndCoverage(t *testing.T) {
 	tests := []struct {
-		name   string
-		mode   GatingMode
-		counts map[string]int
-		want   int
+		name       string
+		useMaxRole bool
+		counts     map[string]int
+		want       int
 	}{
-		{name: "sum", mode: GatingModeSum, counts: map[string]int{"prefill": 2, "decode": 8}, want: 10},
-		{name: "max role", mode: GatingModeMaxRole, counts: map[string]int{"prefill": 2, "decode": 8}, want: 8},
-		{name: "sum requires every role", mode: GatingModeSum, counts: map[string]int{"decode": 8}, want: 0},
-		{name: "max role requires every role", mode: GatingModeMaxRole, counts: map[string]int{"decode": 8}, want: 0},
+		{name: "sum", counts: map[string]int{"prefill": 2, "decode": 8}, want: 10},
+		{name: "max role", useMaxRole: true, counts: map[string]int{"prefill": 2, "decode": 8}, want: 8},
+		{name: "sum requires every role", counts: map[string]int{"decode": 8}, want: 0},
+		{name: "max role requires every role", useMaxRole: true, counts: map[string]int{"decode": 8}, want: 0},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := revisionWeight(test.counts, []string{"prefill", "decode"}, test.mode); got != test.want {
+			if got := revisionWeight(test.counts, []string{"prefill", "decode"}, test.useMaxRole); got != test.want {
 				t.Fatalf("revisionWeight() = %d, want %d", got, test.want)
 			}
 		})
