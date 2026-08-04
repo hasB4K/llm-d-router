@@ -80,16 +80,23 @@ other scorers select a healthier endpoint when the same-slice endpoint is
 overloaded.
 
 A matching endpoint receives the full slice weight; a non-matching endpoint
-receives zero. For example, a load scorer with weight `5` and scores of `0.4`
-for the same-slice endpoint and `0.9` for a cross-slice endpoint gives the
-cross-slice endpoint this advantage:
+receives zero. Consider this illustrative example:
 
 ```text
-5 * (0.9 - 0.4) = 2.5
+loadWeight = 5
+sameSliceLoadScore = 0.4
+crossSliceLoadScore = 0.9
+
+sameSliceWeightedLoadScore = loadWeight * sameSliceLoadScore = 2.0
+crossSliceWeightedLoadScore = loadWeight * crossSliceLoadScore = 4.5
+crossSliceAdvantage = 4.5 - 2.0 = 2.5
 ```
 
-A slice weight above `2.5` prefers the same NVL72 domain. A lower weight lets
-the load scorer select the cross-domain endpoint.
+The slice scorer adds `sliceWeight` only to the same-slice endpoint. In this
+example, `sliceWeight` must therefore be greater than `crossSliceAdvantage`
+(`2.5`) for the same NVL72 domain to win. This threshold is specific to the
+example; production values depend on the other configured scorers and their
+runtime scores.
 
 ## Operational Notes
 
