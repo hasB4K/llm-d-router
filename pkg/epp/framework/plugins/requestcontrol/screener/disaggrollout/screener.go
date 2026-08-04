@@ -37,6 +37,8 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 		allowedRevisions := make(map[string]struct{}, len(seenRevisions))
 		for revision := range seenRevisions {
 			share := distribution.shares[revision]
+			// Missing required roles and revisions absent from the warmed
+			// distribution both resolve to zero and fail closed.
 			if share == 0 {
 				recordGatingDropped(revision)
 				continue
