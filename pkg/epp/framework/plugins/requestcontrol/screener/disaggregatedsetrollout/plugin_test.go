@@ -367,21 +367,13 @@ func TestRevisionModesCacheExpectedShares(t *testing.T) {
 	}
 }
 
-func TestScreenerWeightedGatingRunsBeforeStrictScreening(t *testing.T) {
-	screener := newTestScreener(validConfig())
-	seedCounts(t, screener, map[string]map[string]int{
-		"v1": {"prefill": 3, "decode": 3},
-		"v2": {"prefill": 1, "decode": 1},
-	})
-	screener.rand01 = func() float64 { return 0 }
-	candidates := []fwksched.Endpoint{
-		endpoint("v1-p", revLabels("v1")),
-		endpoint("v2-p", revLabels("v2")),
+func TestPickWeightedRevision(t *testing.T) {
+	shares := map[string]float64{"v1": 0.75, "v2": 0.25}
+	if got := pickWeightedRevision(shares, 0); got != "v1" {
+		t.Fatalf("draw 0 selected %q, want v1", got)
 	}
-	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-	got := screenCandidates(t, screener, request, candidates)
-	if len(got) != 1 || got[0].GetMetadata().Name != "v1-p" {
-		t.Fatalf("want selected v1 endpoint, got %v", got)
+	if got := pickWeightedRevision(shares, 0.9); got != "v2" {
+		t.Fatalf("draw 0.9 selected %q, want v2", got)
 	}
 }
 
@@ -391,7 +383,6 @@ func TestScreenerPinnedUncoveredRevisionFailsClosed(t *testing.T) {
 		"v1": {"prefill": 3},
 		"v2": {"prefill": 1, "decode": 1},
 	})
-	screener.rand01 = func() float64 { panic("pinned requests must not choose a revision") }
 	candidates := []fwksched.Endpoint{
 		endpoint("v1-p", revLabels("v1")),
 		endpoint("v2-p", revLabels("v2")),

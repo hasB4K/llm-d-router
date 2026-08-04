@@ -64,7 +64,9 @@ type Scope struct {
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// HeaderSelector defines one header/label pair to filter and tag on.
+// HeaderSelector defines one header/label pair to select and stamp. Strict
+// selectors are consumed by the Screener; prefer selectors are consumed by a
+// referenced DisaggregatedSet preference scorer. ResponseHeader stamps both.
 type HeaderSelector struct {
 	Name       string       `json:"name"`
 	HeaderName string       `json:"headerName"`
@@ -87,7 +89,9 @@ func (s *HeaderSelector) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// SelectorMode selects strict candidate screening or soft affinity scoring.
+// SelectorMode selects which plugin consumes a header selector. Keeping the
+// mode here makes request matching and response stamping share one header/label
+// definition instead of duplicating protocol configuration across plugins.
 type SelectorMode string
 
 const (
@@ -134,6 +138,8 @@ const (
 	// Traffic converges on (sum(crossRolePods(rev)) / sum over all
 	// revisions), independent of the picker downstream. The "sum" name
 	// refers to the per-revision sum used as weight.
+	// For A={prefill:2,decode:9} and B={prefill:1,decode:1}, the weights
+	// are 11 and 2, producing shares of 11/13 and 2/13.
 	GatingModeSum GatingMode = "sum"
 	// GatingModeMaxRole applies the same coverage check as GatingModeSum, then
 	// uses the largest Ready pod count among the required roles as each covered

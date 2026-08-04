@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"sync"
 
@@ -55,7 +54,6 @@ type Screener struct {
 	scope            labels.Selector
 	revisionLabelKey string
 	roleLabelKey     string
-	rand01           func() float64
 
 	mu           sync.RWMutex
 	pods         map[types.NamespacedName]podInfo
@@ -119,7 +117,6 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 		scope:            scope,
 		revisionLabelKey: revisionLabelKey,
 		roleLabelKey:     roleLabelKey,
-		rand01:           rand.Float64,
 		pods:             make(map[types.NamespacedName]podInfo),
 	}
 }
@@ -135,16 +132,6 @@ func (c *Screener) PreferenceSelectors() []HeaderSelector {
 		}
 	}
 	return selectors
-}
-
-// RecordPreferenceOutcome records whether a prefer selector matched at least
-// one candidate.
-func (c *Screener) RecordPreferenceOutcome(selectorName string, matched bool) {
-	if matched {
-		recordScreeningOutcome(selectorName, ModePrefer, screeningOutcomeMatched)
-		return
-	}
-	recordScreeningOutcome(selectorName, ModePrefer, screeningOutcomeNoMatchPreferFallback)
 }
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
@@ -163,7 +150,9 @@ func (c *Screener) RegisterDependencies(registrar fwkdl.Registrar) error {
 	})
 }
 
-// ResponseHeader stamps configured selector values from the selected endpoint.
+// ResponseHeader stamps configured selector values after the selected upstream
+// endpoint begins responding. In a two-EPP topology, the coordinator forwards
+// the prefill EPP's stamped headers to the decode request.
 func (c *Screener) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, endpoint *fwkdl.EndpointMetadata) {
 	if endpoint == nil || response == nil || response.Headers == nil {
 		return
@@ -171,7 +160,6 @@ func (c *Screener) ResponseHeader(_ context.Context, _ *fwksched.InferenceReques
 	for _, selector := range c.config.HeaderSelectors {
 		if value := endpoint.Labels[selector.LabelKey]; value != "" {
 			response.Headers[selector.HeaderName] = value
-			recordHeaderStamped(selector.Name)
 		}
 	}
 }
@@ -246,7 +234,9 @@ func (c *Screener) rebuildDistributionLocked() {
 	for _, pod := range c.pods {
 		incrementRoleCount(roleCounts, pod)
 	}
+	previous := c.distribution
 	c.distribution = newRevisionDistribution(roleCounts, requiredRoles, mode)
+	recordRevisionGatingShares(c.typedName.Name, mode, previous, c.distribution)
 }
 
 func incrementRoleCount(counts map[string]map[string]int, pod podInfo) {

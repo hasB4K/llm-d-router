@@ -14,9 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Metric tests share process-global Prometheus collectors registered once
-// via sync.Once. Do NOT call t.Parallel() in this file because the shared
-// registry would race.
+// Metric tests share process-global Prometheus collectors registered once via
+// sync.Once. Do not call t.Parallel() in this file.
 package disaggregatedsetrollout
 
 import (
@@ -24,67 +23,20 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	corev1 "k8s.io/api/core/v1"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
-	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-// resetMetrics zeros the underlying collectors between tests. Registration is
-// process-global via sync.Once so it cannot be re-registered, but Reset() clears
-// the observed samples.
 func resetMetrics(t *testing.T) {
 	t.Helper()
 	registerMetrics()
-	headerStampedTotal.Reset()
-	screeningOutcomeTotal.Reset()
-	gatingDroppedTotal.Reset()
+	strictHeaderNoMatchTotal.Reset()
+	revisionGatingShare.Reset()
 }
 
-// --- Header stamped --------------------------------------------------------
-
-func TestMetric_HeaderStamped_IncrementsPerSelector(t *testing.T) {
-	resetMetrics(t)
-	screener := newTestScreener(validConfig())
-	screener.ResponseHeader(context.Background(), nil,
-		&fwkrc.Response{Headers: map[string]string{}},
-		&fwkdl.EndpointMetadata{Labels: revLabels("v1")},
-	)
-	if got := testutil.ToFloat64(headerStampedTotal.WithLabelValues("revision")); got != 1 {
-		t.Fatalf("want 1, got %v", got)
-	}
-}
-
-func TestMetric_HeaderStamped_SkipsMissingLabel(t *testing.T) {
-	resetMetrics(t)
-	screener := newTestScreener(validConfig())
-	screener.ResponseHeader(context.Background(), nil,
-		&fwkrc.Response{Headers: map[string]string{}},
-		&fwkdl.EndpointMetadata{Labels: map[string]string{}},
-	)
-	if got := testutil.ToFloat64(headerStampedTotal.WithLabelValues("revision")); got != 0 {
-		t.Fatalf("want 0 (no label), got %v", got)
-	}
-}
-
-// --- Screening outcomes ----------------------------------------------------
-
-func TestMetric_ScreeningOutcome_Matched(t *testing.T) {
-	resetMetrics(t)
-	config := validConfig()
-	config.RevisionGating = nil
-	screener := newTestScreener(config)
-	screener.screenStrictSelectors(context.Background(),
-		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}},
-		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
-	)
-	got := testutil.ToFloat64(screeningOutcomeTotal.WithLabelValues("revision", string(ModeStrict), screeningOutcomeMatched))
-	if got != 1 {
-		t.Fatalf("matched: want 1, got %v", got)
-	}
-}
-
-func TestMetric_ScreeningOutcome_NoMatchStrict(t *testing.T) {
+func TestMetricStrictHeaderNoMatch(t *testing.T) {
 	resetMetrics(t)
 	config := validConfig()
 	config.RevisionGating = nil
@@ -93,50 +45,53 @@ func TestMetric_ScreeningOutcome_NoMatchStrict(t *testing.T) {
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
 	)
-	got := testutil.ToFloat64(screeningOutcomeTotal.WithLabelValues("revision", string(ModeStrict), screeningOutcomeNoMatchStrict))
+
+	got := testutil.ToFloat64(strictHeaderNoMatchTotal.WithLabelValues("test-screener", "revision"))
 	if got != 1 {
-		t.Fatalf("no_match_strict: want 1, got %v", got)
+		t.Fatalf("strict no-match: want 1, got %v", got)
 	}
 }
 
-func TestMetric_ScreeningOutcome_NoMatchPreferFallback(t *testing.T) {
-	resetMetrics(t)
-	screener := newTestScreener(validConfig())
-	screener.RecordPreferenceOutcome("revision", false)
-	got := testutil.ToFloat64(screeningOutcomeTotal.WithLabelValues("revision", string(ModePrefer), screeningOutcomeNoMatchPreferFallback))
-	if got != 1 {
-		t.Fatalf("prefer_fallback: want 1, got %v", got)
-	}
-}
-
-// --- RevisionGating dropped -------------------------------------------------------
-
-func TestMetric_GatingDropped_OncePerRevisionPerCall(t *testing.T) {
+func TestMetricRevisionGatingShare(t *testing.T) {
 	resetMetrics(t)
 	screener := newTestScreener(validConfig())
 	seedPods(t, screener,
-		readyPod("p1", "v1", "prefill"),
-		readyPod("p2", "v1", "prefill"),
-		readyPod("p3", "v1", "prefill"),
-		readyPod("p4", "v2", "prefill"),
-		readyPod("d4", "v2", "decode"),
+		readyPod("v1-p", "v1", "prefill"),
+		readyPod("v1-d", "v1", "decode"),
+		readyPod("v2-p", "v2", "prefill"),
 	)
-	pods := []fwksched.Endpoint{
-		endpoint("p1", revLabels("v1")),
-		endpoint("p2", revLabels("v1")),
-		endpoint("p3", revLabels("v1")),
-		endpoint("p4", revLabels("v2")),
+
+	want := map[string]float64{"v1": 1, "v2": 0}
+	for revision, expected := range want {
+		got := testutil.ToFloat64(revisionGatingShare.WithLabelValues("test-screener", string(GatingModeSum), revision))
+		if got != expected {
+			t.Fatalf("revision %s: want share %v, got %v", revision, expected, got)
+		}
+	}
+}
+
+func TestMetricRevisionGatingShareDeletesRemovedRevision(t *testing.T) {
+	resetMetrics(t)
+	screener := newTestScreener(validConfig())
+	v1Prefill := readyPod("v1-p", "v1", "prefill")
+	v1Decode := readyPod("v1-d", "v1", "decode")
+	seedPods(t, screener,
+		v1Prefill,
+		v1Decode,
+		readyPod("v2-p", "v2", "prefill"),
+		readyPod("v2-d", "v2", "decode"),
+	)
+	if got := testutil.CollectAndCount(revisionGatingShare); got != 2 {
+		t.Fatalf("want 2 revision series, got %d", got)
 	}
 
-	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-	screener.Screen(context.Background(), request, pods)
-
-	// Three v1 endpoints hit the gate in one call. The counter should read 1,
-	// not 3.
-	if got := testutil.ToFloat64(gatingDroppedTotal.WithLabelValues("v1")); got != 1 {
-		t.Fatalf("v1 dropped once per call: want 1, got %v", got)
+	handler := &podNotificationHandler{screener: screener}
+	for _, pod := range []*corev1.Pod{v1Prefill, v1Decode} {
+		if err := handler.Extract(context.Background(), podEvent(t, pod, fwkdl.EventDelete)); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if got := testutil.ToFloat64(gatingDroppedTotal.WithLabelValues("v2")); got != 0 {
-		t.Fatalf("v2 satisfied gate: want 0, got %v", got)
+	if got := testutil.CollectAndCount(revisionGatingShare); got != 1 {
+		t.Fatalf("want 1 revision series after removal, got %d", got)
 	}
 }

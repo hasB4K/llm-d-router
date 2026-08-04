@@ -18,6 +18,7 @@ package disaggregatedsetrollout
 
 import (
 	"context"
+	"math/rand/v2"
 	"sort"
 
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
@@ -37,10 +38,10 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 		allowedRevisions := make(map[string]struct{}, len(seenRevisions))
 		for revision := range seenRevisions {
 			share := distribution.shares[revision]
-			// Missing required roles and revisions absent from the warmed
-			// distribution both resolve to zero and fail closed.
+			// If one required role is missing, this revision cannot serve a
+			// disaggregated request yet. Missing roles and revisions absent
+			// from the warmed distribution both resolve to zero and fail closed.
 			if share == 0 {
-				recordGatingDropped(revision)
 				continue
 			}
 			shares[revision] = share
@@ -48,7 +49,7 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 		}
 		chosenRevision := ""
 		if !c.hasStrictHeader(request) {
-			chosenRevision = c.pickWeightedRevision(shares)
+			chosenRevision = pickWeightedRevision(shares, rand.Float64())
 		}
 		current = c.applyRevisionDecision(current, allowedRevisions, chosenRevision)
 		if len(current) == 0 {
@@ -104,9 +105,7 @@ func (c *Screener) screenStrictSelectors(_ context.Context, request *fwksched.In
 		}
 		current = matched
 		if len(matched) == 0 {
-			recordScreeningOutcome(selector.Name, selector.Mode, screeningOutcomeNoMatchStrict)
-		} else {
-			recordScreeningOutcome(selector.Name, selector.Mode, screeningOutcomeMatched)
+			recordStrictHeaderNoMatch(c.typedName.Name, selector.Name)
 		}
 		if len(current) == 0 {
 			return current
@@ -156,7 +155,7 @@ func revisionWeight(perRole map[string]int, required []string, useMaxRole bool) 
 	return weight
 }
 
-func (c *Screener) pickWeightedRevision(shares map[string]float64) string {
+func pickWeightedRevision(shares map[string]float64, draw float64) string {
 	revisions := make([]string, 0, len(shares))
 	total := 0.0
 	for revision, share := range shares {
@@ -170,7 +169,7 @@ func (c *Screener) pickWeightedRevision(shares map[string]float64) string {
 	if len(revisions) == 1 {
 		return revisions[0]
 	}
-	x := c.rand01() * total
+	x := draw * total
 	cumulative := 0.0
 	for _, revision := range revisions {
 		cumulative += shares[revision]

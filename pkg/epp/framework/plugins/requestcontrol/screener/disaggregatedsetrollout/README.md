@@ -85,9 +85,10 @@ roles and keeps only endpoints with that revision.
 
 ### Two EPPs
 
-The prefill EPP chooses a covered revision and stamps it. The coordinator must
-forward that header to the decode request. The decode EPP then applies the
-header strictly:
+The prefill EPP chooses a covered revision. When the selected prefill begins
+responding, the response-header hook stamps its revision. The coordinator must
+forward that header to the decode request, where the decode EPP applies it
+strictly:
 
 ```text
 prefill request -> choose revision A -> stamp revision A
@@ -182,7 +183,10 @@ profiles need revision gating to receive the same candidate set.
 | `prefer` | Declares a soft affinity consumed by the separate [`disaggregatedset-prefer-scorer`](../../../scheduling/scorer/disaggregatedsetprefer/README.md). Non-matching endpoints remain eligible. |
 
 Every selector also stamps its configured response header from the endpoint
-that served the request. Stamping is independent of the revision gating mode.
+that served the request. The mode identifies whether the Screener applies a
+hard constraint or the referenced preference scorer applies soft affinity;
+keeping both modes here gives matching and stamping one shared header/label
+definition. Stamping is independent of the revision gating mode.
 
 ## Configuration
 
@@ -226,7 +230,7 @@ Each `headerSelectors` entry has:
 
 | Name | Type | Description |
 |---|---|---|
-| `name` | string | Stable selector name used by metrics. |
+| `name` | string | Stable selector identifier, used as a metric label for strict selectors. |
 | `headerName` | string | Request and response header carrying the selected label value. |
 | `labelKey` | string | Endpoint label compared with the header. |
 | `mode` | string | `strict` screens candidates globally; `prefer` is consumed by the separate preference scorer. |
@@ -243,8 +247,10 @@ never silently substitutes another revision or crosses revisions.
 
 ## Metrics
 
-- `llm_d_epp_disaggregatedset_header_stamped_total`
-- `llm_d_epp_disaggregatedset_screening_outcome_total`
-- `llm_d_epp_disaggregatedset_gating_dropped_total`
+- `llm_d_epp_disaggregatedset_strict_header_no_match_total`: strict header
+  selections that matched no endpoint and failed closed.
+- `llm_d_epp_disaggregatedset_revision_gating_share`: current weighted share
+  from `0` to `1` for each observed revision. Incomplete revisions report `0`.
 
-Metrics use bounded selector, mode, outcome, or revision labels as applicable.
+The share gauge removes a revision's series when that revision disappears from
+the observed Pod set.

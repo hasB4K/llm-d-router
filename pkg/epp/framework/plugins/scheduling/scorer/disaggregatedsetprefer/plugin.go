@@ -69,18 +69,16 @@ func Factory(name string, rawParameters *json.Decoder, handle fwkplugin.Handle) 
 		name = PluginType
 	}
 	return &Scorer{
-		typedName:     fwkplugin.TypedName{Type: PluginType, Name: name},
-		selectors:     selectors,
-		recordOutcome: screener.RecordPreferenceOutcome,
+		typedName: fwkplugin.TypedName{Type: PluginType, Name: name},
+		selectors: selectors,
 	}, nil
 }
 
 // Scorer gives endpoints matching configured prefer selectors a soft affinity
 // score without removing non-matching endpoints.
 type Scorer struct {
-	typedName     fwkplugin.TypedName
-	selectors     []disaggregatedsetrollout.HeaderSelector
-	recordOutcome func(selectorName string, matched bool)
+	typedName fwkplugin.TypedName
+	selectors []disaggregatedsetrollout.HeaderSelector
 }
 
 var _ fwksched.Scorer = (*Scorer)(nil)
@@ -105,18 +103,13 @@ func (s *Scorer) Score(_ context.Context, request *fwksched.InferenceRequest, en
 			continue
 		}
 		activeSelectors++
-		matched := false
 		for _, endpoint := range endpoints {
 			if endpoint == nil || endpoint.GetMetadata() == nil {
 				continue
 			}
 			if endpoint.GetMetadata().Labels[selector.LabelKey] == requested {
 				scores[endpoint]++
-				matched = true
 			}
-		}
-		if s.recordOutcome != nil {
-			s.recordOutcome(selector.Name, matched)
 		}
 	}
 	if activeSelectors > 1 {
