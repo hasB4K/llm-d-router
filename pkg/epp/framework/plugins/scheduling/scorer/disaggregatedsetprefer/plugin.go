@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggprefer
+package disaggregatedsetprefer
 
 import (
 	"context"
@@ -24,10 +24,10 @@ import (
 
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	disaggrollout "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggrollout"
+	disaggregatedsetrollout "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggregatedsetrollout"
 )
 
-const PluginType = "disagg-prefer-scorer"
+const PluginType = "disaggregatedset-prefer-scorer"
 
 type parameters struct {
 	ScreenerRef string `json:"screenerRef" pluginRef:""`
@@ -37,10 +37,10 @@ type parameters struct {
 func ConfigParser(rawParameters *json.Decoder, _ fwkplugin.Handle) (any, error) {
 	config := parameters{}
 	if rawParameters == nil {
-		return nil, errors.New("disagg-prefer-scorer requires parameters")
+		return nil, errors.New("disaggregatedset-prefer-scorer requires parameters")
 	}
 	if err := rawParameters.Decode(&config); err != nil {
-		return nil, fmt.Errorf("decode disagg-prefer-scorer parameters: %w", err)
+		return nil, fmt.Errorf("decode disaggregatedset-prefer-scorer parameters: %w", err)
 	}
 	if config.ScreenerRef == "" {
 		return nil, errors.New("screenerRef is required")
@@ -57,9 +57,9 @@ func Factory(name string, rawParameters *json.Decoder, handle fwkplugin.Handle) 
 	}
 	config := parsed.(parameters)
 	plugin := handle.Plugin(config.ScreenerRef)
-	screener, ok := plugin.(*disaggrollout.Screener)
+	screener, ok := plugin.(*disaggregatedsetrollout.Screener)
 	if !ok {
-		return nil, fmt.Errorf("screenerRef %q is not a %s plugin", config.ScreenerRef, disaggrollout.PluginType)
+		return nil, fmt.Errorf("screenerRef %q is not a %s plugin", config.ScreenerRef, disaggregatedsetrollout.PluginType)
 	}
 	selectors := screener.PreferenceSelectors()
 	if len(selectors) == 0 {
@@ -79,7 +79,7 @@ func Factory(name string, rawParameters *json.Decoder, handle fwkplugin.Handle) 
 // score without removing non-matching endpoints.
 type Scorer struct {
 	typedName     fwkplugin.TypedName
-	selectors     []disaggrollout.HeaderSelector
+	selectors     []disaggregatedsetrollout.HeaderSelector
 	recordOutcome func(selectorName string, matched bool)
 }
 

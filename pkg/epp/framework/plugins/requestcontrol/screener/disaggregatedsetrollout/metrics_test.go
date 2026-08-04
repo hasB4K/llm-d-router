@@ -17,7 +17,7 @@ limitations under the License.
 // Metric tests share process-global Prometheus collectors registered once
 // via sync.Once. Do NOT call t.Parallel() in this file because the shared
 // registry would race.
-package disaggrollout
+package disaggregatedsetrollout
 
 import (
 	"context"

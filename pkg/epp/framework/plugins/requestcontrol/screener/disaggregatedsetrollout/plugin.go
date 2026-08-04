@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggrollout
+package disaggregatedsetrollout
 
 import (
 	"context"
@@ -41,8 +41,8 @@ import (
 const (
 	// PluginType is the plugin type for revision gating, strict header
 	// filtering, and response-header stamping.
-	PluginType       = "disagg-rollout-screener"
-	podExtractorType = "disagg-rollout-pod-extractor"
+	PluginType       = "disaggregatedset-rollout-screener"
+	podExtractorType = "disaggregatedset-rollout-pod-extractor"
 )
 
 var podGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
@@ -80,17 +80,17 @@ var (
 	_ fwkdl.NotificationExtractor   = (*podNotificationHandler)(nil)
 )
 
-// Factory creates a disagg-rollout-screener from normal plugin parameters.
+// Factory creates a disaggregatedset-rollout-screener from normal plugin parameters.
 func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
 	if name == "" {
 		name = PluginType
 	}
 	config := Config{}
 	if parameters == nil {
-		return nil, errors.New("disagg-rollout-screener requires parameters")
+		return nil, errors.New("disaggregatedset-rollout-screener requires parameters")
 	}
 	if err := parameters.Decode(&config); err != nil {
-		return nil, fmt.Errorf("decode disagg-rollout-screener parameters: %w", err)
+		return nil, fmt.Errorf("decode disaggregatedset-rollout-screener parameters: %w", err)
 	}
 	if config.Scope.Namespace == "" {
 		config.Scope.Namespace = os.Getenv("NAMESPACE")

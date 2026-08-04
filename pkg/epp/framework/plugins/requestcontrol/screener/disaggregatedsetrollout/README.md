@@ -1,6 +1,6 @@
-# Disaggregated Rollout Screener
+# DisaggregatedSet Rollout Screener
 
-**Type:** `disagg-rollout-screener`
+**Type:** `disaggregatedset-rollout-screener`
 **Interfaces:** `requestcontrol.Screener`, `requestcontrol.ResponseHeaderProcessor`
 
 Screens located endpoints before data producers, admission plugins, and scheduling profiles run. It keeps incompatible prefill and decode revisions from being paired during a `DisaggregatedSet` rollout.
@@ -59,7 +59,7 @@ Each `headerSelectors` entry has:
 apiVersion: llm-d.ai/v1alpha1
 kind: EndpointPickerConfig
 plugins:
-- type: disagg-rollout-screener
+- type: disaggregatedset-rollout-screener
   name: rollout-screener
   parameters:
     scope:
@@ -89,8 +89,8 @@ For two EPPs, the prefill-side coordinator must forward the stamped revision hea
 
 ## Metrics
 
-- `llm_d_epp_disagg_header_stamped_total`
-- `llm_d_epp_disagg_screening_outcome_total`
-- `llm_d_epp_disagg_gating_dropped_total`
+- `llm_d_epp_disaggregatedset_header_stamped_total`
+- `llm_d_epp_disaggregatedset_screening_outcome_total`
+- `llm_d_epp_disaggregatedset_gating_dropped_total`
 
 All metrics are labeled with bounded selector, mode, outcome, or revision values as appropriate.

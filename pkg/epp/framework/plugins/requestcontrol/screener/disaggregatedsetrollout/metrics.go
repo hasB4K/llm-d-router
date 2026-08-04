@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggrollout
+package disaggregatedsetrollout
 
 import (
 	"sync"
@@ -24,10 +24,10 @@ import (
 )
 
 // Metric namespace/subsystem. Landed under the shared llm_d_epp subsystem so
-// operators can grep for one namespace when debugging disagg deployments.
+// operators can grep for one namespace when debugging DisaggregatedSet deployments.
 const (
 	metricsSubsystem = "llm_d_epp"
-	metricsPrefix    = "disagg"
+	metricsPrefix    = "disaggregatedset"
 )
 
 var (
@@ -73,7 +73,8 @@ func registerMetrics() {
 	})
 }
 
-// Screening outcome labels attached to disagg_screening_outcome_total. "absent"
+// Screening outcome labels attached to
+// llm_d_epp_disaggregatedset_screening_outcome_total. "absent"
 // (no header sent) is deliberately NOT recorded. It is the silent default
 // on every request that doesn't opt in, so the counter would balloon with
 // near-zero-signal increments.

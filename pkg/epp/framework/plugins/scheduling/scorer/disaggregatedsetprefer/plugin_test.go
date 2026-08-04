@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggprefer
+package disaggregatedsetprefer
 
 import (
 	"context"
@@ -26,15 +26,15 @@ import (
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	disaggrollout "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggrollout"
+	disaggregatedsetrollout "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggregatedsetrollout"
 	testutils "github.com/llm-d/llm-d-router/test/utils"
 )
 
 func TestScorerMatchesWithoutRemovingCandidates(t *testing.T) {
 	scorer := &Scorer{
 		typedName: fwkplugin.TypedName{Type: PluginType, Name: "prefer"},
-		selectors: []disaggrollout.HeaderSelector{{
-			Name: "revision", HeaderName: "x-disagg-revision", LabelKey: "revision", Mode: disaggrollout.ModePrefer,
+		selectors: []disaggregatedsetrollout.HeaderSelector{{
+			Name: "revision", HeaderName: "x-disagg-revision", LabelKey: "revision", Mode: disaggregatedsetrollout.ModePrefer,
 		}},
 	}
 	candidates := []fwksched.Endpoint{endpoint("v1", map[string]string{"revision": "v1"}), endpoint("v2", map[string]string{"revision": "v2"})}
@@ -56,9 +56,9 @@ func TestScorerMatchesWithoutRemovingCandidates(t *testing.T) {
 }
 
 func TestScorerAveragesMultipleSelectors(t *testing.T) {
-	scorer := &Scorer{selectors: []disaggrollout.HeaderSelector{
-		{Name: "revision", HeaderName: "x-disagg-revision", LabelKey: "revision", Mode: disaggrollout.ModePrefer},
-		{Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "slice", Mode: disaggrollout.ModePrefer},
+	scorer := &Scorer{selectors: []disaggregatedsetrollout.HeaderSelector{
+		{Name: "revision", HeaderName: "x-disagg-revision", LabelKey: "revision", Mode: disaggregatedsetrollout.ModePrefer},
+		{Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "slice", Mode: disaggregatedsetrollout.ModePrefer},
 	}}
 	candidates := []fwksched.Endpoint{
 		endpoint("both", map[string]string{"revision": "v2", "slice": "s2"}),
@@ -82,7 +82,7 @@ func TestFactoryLinksScreener(t *testing.T) {
 		"scope":{"labelSelector":"disaggregatedset.x-k8s.io/name=my-set","namespace":"default"},
 		"headerSelectors":[{"name":"slice","headerName":"x-disagg-slice","labelKey":"disaggregatedset.x-k8s.io/slice","mode":"prefer"}]
 	}`)
-	plugin, err := disaggrollout.Factory("test-screener", fwkplugin.StrictDecoder(screenerConfig), nil)
+	plugin, err := disaggregatedsetrollout.Factory("test-screener", fwkplugin.StrictDecoder(screenerConfig), nil)
 	if err != nil {
 		t.Fatalf("create screener: %v", err)
 	}

@@ -1,9 +1,9 @@
-# Disaggregated Preference Scorer
+# DisaggregatedSet Preference Scorer
 
-**Type:** `disagg-prefer-scorer`
+**Type:** `disaggregatedset-prefer-scorer`
 **Interface:** `scheduling.Scorer`
 
-Adds soft affinity for endpoints whose labels match request headers configured as `prefer` selectors on a [`disagg-rollout-screener`](../../../requestcontrol/screener/disaggrollout/README.md). Non-matching endpoints remain eligible.
+Adds soft affinity for endpoints whose labels match request headers configured as `prefer` selectors on a [`disaggregatedset-rollout-screener`](../../../requestcontrol/screener/disaggregatedsetrollout/README.md). Non-matching endpoints remain eligible.
 
 ## What It Does
 
@@ -20,7 +20,7 @@ The scheduling profile multiplies the resulting `[0,1]` score by the configured 
 
 | Name | Type | Required | Description |
 |---|---|---|---|
-| `screenerRef` | string | Yes | Name of the `disagg-rollout-screener` containing the `prefer` header selectors. |
+| `screenerRef` | string | Yes | Name of the `disaggregatedset-rollout-screener` containing the `prefer` header selectors. |
 
 ## DisaggregatedSet Slice Affinity
 
@@ -34,7 +34,7 @@ The scorer weight should represent **how preferable it is to run within the same
 apiVersion: llm-d.ai/v1alpha1
 kind: EndpointPickerConfig
 plugins:
-- type: disagg-rollout-screener
+- type: disaggregatedset-rollout-screener
   name: rollout-screener
   parameters:
     scope:
@@ -53,7 +53,7 @@ plugins:
       mode: max-role
       requireRoles:
         values: [prefill, decode]
-- type: disagg-prefer-scorer
+- type: disaggregatedset-prefer-scorer
   name: slice-affinity
   parameters:
     screenerRef: rollout-screener

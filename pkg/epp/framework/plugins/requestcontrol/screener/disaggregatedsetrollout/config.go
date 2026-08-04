@@ -14,14 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package disaggrollout provides a request-control Screener for safe rollouts
+// Package disaggregatedsetrollout provides a request-control Screener for safe rollouts
 // across roles of a disaggregated inference deployment.
 //
 // Two mechanisms shape the survivor set the scheduler picker sees:
 //
 //   - Header selectors: strict mode screens the candidate pool to endpoints
 //     whose label matches the request header. Prefer-mode selectors are
-//     consumed by the separate disagg preference scorer.
+//     consumed by the separate DisaggregatedSet preference scorer.
 //
 //   - Revision gating: a request-independent safety+load-shaping layer
 //     that (a) drops revisions missing Ready pods on any required role
@@ -32,7 +32,7 @@ limitations under the License.
 // The Screener observes Pods through the data layer's Kubernetes notification
 // source, applies gating and strict selectors before scheduling, and stamps
 // response headers.
-package disaggrollout
+package disaggregatedsetrollout
 
 import (
 	"encoding/json"
@@ -50,7 +50,7 @@ const (
 	DefaultRoleLabel     = "disaggregatedset.x-k8s.io/role"
 )
 
-// Config is the parameters block of a disagg-rollout-screener plugin.
+// Config is the parameters block of a disaggregatedset-rollout-screener plugin.
 type Config struct {
 	Scope           Scope            `json:"scope"`
 	HeaderSelectors []HeaderSelector `json:"headerSelectors"`

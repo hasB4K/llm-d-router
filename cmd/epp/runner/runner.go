@@ -101,7 +101,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/dataproducer/tokenizer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/requestattributereporter"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/requestheader/agentidentity"
-	disaggrollout "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggrollout"
+	disaggregatedsetrollout "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggregatedsetrollout"
 	testresponsereceived "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/test/responsereceived"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/anthropic"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/openai"
@@ -124,7 +124,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/profilehandler/single"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/activerequest"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/contextlengthaware"
-	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/disaggprefer"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/disaggregatedsetprefer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/endpointattribute"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/kvcacheutilization"
 	latencyscorer "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/latency"
@@ -554,12 +554,12 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 
 // registerInTreePlugins registers the factory functions of all known plugins
 func (r *Runner) registerInTreePlugins() {
-	fwkplugin.Register(disaggrollout.PluginType, fwkplugin.StabilityAlpha, disaggrollout.Factory)
+	fwkplugin.Register(disaggregatedsetrollout.PluginType, fwkplugin.StabilityAlpha, disaggregatedsetrollout.Factory)
 	fwkplugin.RegisterWithPluginDependencies(
-		disaggprefer.PluginType,
+		disaggregatedsetprefer.PluginType,
 		fwkplugin.StabilityAlpha,
-		disaggprefer.Factory,
-		disaggprefer.ConfigParser,
+		disaggregatedsetprefer.Factory,
+		disaggregatedsetprefer.ConfigParser,
 	)
 
 	// bylabel role filters
