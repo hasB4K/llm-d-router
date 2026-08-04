@@ -89,8 +89,11 @@ Step  Old decode  Old prefill  New decode  New prefill  Total  Action
 
 At steps 2 and 3, the new revision has no prefill Pod, so it cannot serve a
 request. Once both revisions are covered, decode is the globally largest role.
-`max-role` therefore produces old/new shares of 60/40 at step 4, 40/60 at step
-6, and 20/80 at step 8.
+`max-role` therefore produces these old/new revision shares:
+
+- Step 4: 60% old, 40% new.
+- Step 6: 40% old, 60% new.
+- Step 8: 20% old, 80% new.
 
 ## Request Lifecycle
 
@@ -162,7 +165,7 @@ global totals: prefill = 3, decode = 10
 dominant role: decode
 A: 9 decode Pods
 B: 1 decode Pod
-traffic: A 90 percent, B 10 percent
+traffic: A 90%, B 10%
 ```
 
 The dominant role is selected once for the whole distribution. It cannot be
@@ -189,7 +192,7 @@ For the same example:
 ```text
 A: 2 + 9 = 11
 B: 1 + 1 = 2
-traffic: A 84.6 percent, B 15.4 percent
+traffic: A 84.6%, B 15.4%
 ```
 
 `sum` uses progress from every role and is a more general heuristic when role
@@ -279,15 +282,14 @@ Each `headerSelectors` entry has:
 |---|---|---|
 | `name` | string | Stable selector identifier, used as a metric label for strict selectors. |
 | `headerName` | string | Request and response header carrying the selected label value. |
-| `labelKey` | string | Endpoint label compared with the header. |
+| `labelKey` | string | Kubernetes Pod label whose value is compared with the request header and copied from the selected endpoint into the response header. |
 | `mode` | string | `strict` screens candidates globally; `prefer` is consumed by the separate preference scorer. |
 
 ## Fail-Closed Behavior
 
 With `sum` or `max-role`, a revision is ineligible until every required role
-has at least one Ready Pod. This also means requests fail closed while the Pod
-notification cache is warming. If no revision survives, request control
-returns HTTP 503.
+has at least one Ready Pod. If no revision survives, request control returns
+HTTP 503.
 
 A strict header with no matching endpoint also returns HTTP 503. The plugin
 never silently substitutes another revision or crosses revisions.

@@ -68,30 +68,28 @@ schedulingProfiles:
   - pluginRef: picker
 ```
 
-The component scheduling the first role must forward `x-disagg-slice` with the later role's request. The Screener stamps this header from the selected endpoint label.
+In a two-EPP topology, the coordinator must copy `x-disagg-slice` from the
+prefill response into the decode request. The Screener stamps the prefill
+response header from the selected prefill endpoint's slice label.
 
-## Benchmarking and Tuning the Weight
+## Tuning the Weight
 
-Benchmark with the model, KV-cache sizes, concurrency, and network topology used in production:
+Benchmark same-slice and cross-slice KV transfers with representative traffic.
+Choose a weight that normally avoids the cross-domain transfer but still lets
+other scorers select a healthier endpoint when the same-slice endpoint is
+overloaded.
 
-1. Force prefill and decode onto the same slice and record KV-transfer latency and end-to-end latency, especially p95.
-2. Force them onto different slices and repeat the measurement.
-3. Repeat while increasing load on the same-slice decode endpoints to find when avoiding the cross-domain transfer is no longer worth the added queue or load.
-4. Compare that crossover with the weighted score difference produced by the other configured scorers.
-
-The scheduler adds weighted scores. For a matching slice, this scorer contributes its full weight; for a non-match, it contributes zero. Therefore a same-slice endpoint wins over a cross-slice endpoint when:
-
-```text
-sliceWeight > otherWeightedScore(crossSlice) - otherWeightedScore(sameSlice)
-```
-
-For example, suppose a load scorer has weight `5` and returns `0.4` for the same-slice endpoint and `0.9` for a less-loaded cross-slice endpoint. The cross-slice advantage from load is:
+A matching endpoint receives the full slice weight; a non-matching endpoint
+receives zero. For example, a load scorer with weight `5` and scores of `0.4`
+for the same-slice endpoint and `0.9` for a cross-slice endpoint gives the
+cross-slice endpoint this advantage:
 
 ```text
 5 * (0.9 - 0.4) = 2.5
 ```
 
-A slice weight above `2.5`, such as `3`, prefers the same NVL72 domain. A weight below `2.5` lets the load advantage select the cross-domain endpoint. Use the measured same-domain versus cross-domain latency penalty to decide which side of that crossover should win, then validate the chosen value with representative traffic.
+A slice weight above `2.5` prefers the same NVL72 domain. A lower weight lets
+the load scorer select the cross-domain endpoint.
 
 ## Operational Notes
 
