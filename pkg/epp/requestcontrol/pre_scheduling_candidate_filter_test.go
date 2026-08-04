@@ -107,6 +107,28 @@ func TestRunPreSchedulingCandidateFiltersAllObserveOriginalSetAfterEmptyResult(t
 	assert.Empty(t, result)
 }
 
+func TestRunPreSchedulingCandidateFiltersIsolatesPluginInputs(t *testing.T) {
+	endpoints := []fwksched.Endpoint{candidateEndpoint("a"), candidateEndpoint("b")}
+	var secondInput []fwksched.Endpoint
+	config := NewConfig().WithPreSchedulingCandidateFilters(
+		&mockPreSchedulingCandidateFilter{name: "mutate-input", filter: func(got []fwksched.Endpoint) []fwksched.Endpoint {
+			got[0] = candidateEndpoint("replacement")
+			return got
+		}},
+		&mockPreSchedulingCandidateFilter{name: "observe", filter: func(got []fwksched.Endpoint) []fwksched.Endpoint {
+			secondInput = append(secondInput, got...)
+			return got
+		}},
+	)
+	director := &Director{requestControlPlugins: *config}
+
+	director.runPreSchedulingCandidateFilters(context.Background(), &fwksched.InferenceRequest{}, endpoints)
+
+	require.Len(t, secondInput, 2)
+	assert.Equal(t, "a", secondInput[0].GetMetadata().Name)
+	assert.Equal(t, "a", endpoints[0].GetMetadata().Name)
+}
+
 func candidateEndpoint(name string) fwksched.Endpoint {
 	return fwksched.NewEndpoint(&fwkdl.EndpointMetadata{
 		ID:   types.NamespacedName{Namespace: "default", Name: name},

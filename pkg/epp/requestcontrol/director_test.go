@@ -416,6 +416,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 		targetModelName         string                   // Expected model name after target model resolution
 		admitRequestDenialError error                    // Expected denial error from admission plugin
 		dataProducerPlugin      *mockDataProducerPlugin
+		preSchedulingFilter     *mockPreSchedulingCandidateFilter
 		preRequestPlugin        *mockPreRequestPlugin
 		requestHeaderPlugin     *mockRequestHeaderPlugin
 		wantMutatedBody         map[string]any
@@ -893,6 +894,20 @@ func TestDirector_HandleRequest(t *testing.T) {
 			wantErrCode: errcommon.BadRequest,
 		},
 		{
+			name: "pre-scheduling candidate filter eliminates all candidates",
+			reqBodyMap: map[string]any{
+				"model":  model,
+				"prompt": "critical prompt",
+			},
+			mockAdmissionController: &mockAdmissionController{admitErr: nil},
+			initialTargetModelName:  model,
+			inferenceObjectiveName:  objectiveName,
+			preSchedulingFilter: &mockPreSchedulingCandidateFilter{name: "eliminate-all", filter: func([]fwksched.Endpoint) []fwksched.Endpoint {
+				return nil
+			}},
+			wantErrCode: errcommon.ServiceUnavailable,
+		},
+		{
 			name: "scheduler returns error",
 			reqBodyMap: map[string]any{
 				"model":  model,
@@ -967,6 +982,9 @@ func TestDirector_HandleRequest(t *testing.T) {
 				config := NewConfig()
 				if test.dataProducerPlugin != nil {
 					config = config.WithDataProducerPlugins(test.dataProducerPlugin)
+				}
+				if test.preSchedulingFilter != nil {
+					config = config.WithPreSchedulingCandidateFilters(test.preSchedulingFilter)
 				}
 				if test.preRequestPlugin != nil {
 					config = config.WithPreRequestPlugins(test.preRequestPlugin)

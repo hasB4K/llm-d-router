@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -657,7 +658,7 @@ func (d *Director) runPreSchedulingCandidateFilters(ctx context.Context,
 	for _, plugin := range d.requestControlPlugins.preSchedulingCandidateFilters {
 		loggerDebug.Info("Running PreSchedulingCandidateFilter plugin", "plugin", plugin.TypedName())
 		before := time.Now()
-		pluginEndpoints := plugin.FilterCandidates(ctx, request, endpoints)
+		pluginEndpoints := plugin.FilterCandidates(ctx, request, slices.Clone(endpoints))
 		metrics.RecordPluginProcessingLatency(fwkrc.PreSchedulingCandidateFilterExtensionPoint,
 			plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		allowed := make(map[fwksched.Endpoint]struct{}, len(pluginEndpoints))
