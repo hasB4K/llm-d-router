@@ -1,6 +1,6 @@
 # Disaggregated Rollout Screener
 
-**Type:** `disagg-rollout-screener`  
+**Type:** `disagg-rollout-screener`
 **Interfaces:** `requestcontrol.Screener`, `requestcontrol.ResponseHeaderProcessor`
 
 Screens located endpoints before data producers, admission plugins, and scheduling profiles run. It keeps incompatible prefill and decode revisions from being paired during a `DisaggregatedSet` rollout.

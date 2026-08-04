@@ -1,6 +1,6 @@
 # Disaggregated Preference Scorer
 
-**Type:** `disagg-prefer-scorer`  
+**Type:** `disagg-prefer-scorer`
 **Interface:** `scheduling.Scorer`
 
 Adds soft affinity for endpoints whose labels match request headers configured as `prefer` selectors on a [`disagg-rollout-screener`](../../../requestcontrol/screener/disaggrollout/README.md). Non-matching endpoints remain eligible.
