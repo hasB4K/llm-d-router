@@ -141,10 +141,10 @@ func (c *Screener) PreferenceSelectors() []HeaderSelector {
 // one candidate.
 func (c *Screener) RecordPreferenceOutcome(selectorName string, matched bool) {
 	if matched {
-		recordFilterOutcome(selectorName, ModePrefer, filterOutcomeMatched)
+		recordScreeningOutcome(selectorName, ModePrefer, screeningOutcomeMatched)
 		return
 	}
-	recordFilterOutcome(selectorName, ModePrefer, filterOutcomeNoMatchPreferFallback)
+	recordScreeningOutcome(selectorName, ModePrefer, screeningOutcomeNoMatchPreferFallback)
 }
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification

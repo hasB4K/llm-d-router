@@ -163,7 +163,7 @@ func TestValidate_GatingRequireRolesRejectsDuplicates(t *testing.T) {
 
 func TestValidate_GatingOptional(t *testing.T) {
 	// The whole gating block is optional; leaving it nil validates and
-	// simply skips wiring the gating filter at boot.
+	// simply skips wiring the gating screener at boot.
 	cfg := validConfig()
 	cfg.RevisionGating = nil
 	if err := cfg.Validate(); err != nil {
@@ -197,7 +197,7 @@ func TestValidate_GatingMaxRole(t *testing.T) {
 
 func TestValidate_GatingDisabledSkipsSubValidation(t *testing.T) {
 	// mode=disabled is a legitimate way to keep the block for documentation
-	// while turning the filter off; the sub-block does not need to be set.
+	// while turning gating off; the sub-block does not need to be set.
 	cfg := validConfig()
 	cfg.RevisionGating.Mode = GatingModeDisabled
 	cfg.RevisionGating.RequireRoles = nil

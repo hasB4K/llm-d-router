@@ -14,15 +14,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package disaggregation provides normal framework plugins for label-aware
-// routing across roles of a disaggregated inference deployment.
+// Package disaggrollout provides a request-control Screener for safe rollouts
+// across roles of a disaggregated inference deployment.
 //
 // Two mechanisms shape the survivor set the scheduler picker sees:
 //
-//   - Header selectors: strict-mode narrows the candidate pool to pods
-//     whose label matches the request header (a client pin). Prefer-mode
-//     does the same but tolerates zero matches (fallback). Both are
-//     header-driven; both are optional.
+//   - Header selectors: strict mode screens the candidate pool to endpoints
+//     whose label matches the request header. Prefer-mode selectors are
+//     consumed by the separate disagg preference scorer.
 //
 //   - Revision gating: a request-independent safety+load-shaping layer
 //     that (a) drops revisions missing Ready pods on any required role
@@ -30,10 +29,9 @@ limitations under the License.
 //     revision axis, weighted-random-picks one surviving revision to
 //     collapse the candidate pool to a single revision.
 //
-// The router plugin observes Pods through the data layer's Kubernetes
-// notification source, applies gating and strict selectors before scheduling,
-// and stamps response headers. A prefer scorer references the router and adds
-// soft affinity scores within a scheduling profile.
+// The Screener observes Pods through the data layer's Kubernetes notification
+// source, applies gating and strict selectors before scheduling, and stamps
+// response headers.
 package disaggrollout
 
 import (
@@ -62,7 +60,7 @@ type Config struct {
 // Scope constrains which Pod notifications contribute to revision gating.
 type Scope struct {
 	LabelSelector string `json:"labelSelector"`
-	// Namespace defaults to the router Pod's NAMESPACE environment variable.
+	// Namespace defaults to the EPP Pod's NAMESPACE environment variable.
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -89,7 +87,7 @@ func (s *HeaderSelector) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// SelectorMode selects strict candidate filtering or soft affinity scoring.
+// SelectorMode selects strict candidate screening or soft affinity scoring.
 type SelectorMode string
 
 const (
@@ -103,7 +101,7 @@ const (
 	ModePrefer SelectorMode = "prefer"
 )
 
-// RevisionGating governs revision-axis candidate filtering. Two things happen
+// RevisionGating governs revision-axis candidate screening. Two things happen
 // per request when Active:
 //
 //  1. Coverage check: drop candidates whose revision has zero Ready pods
@@ -147,7 +145,7 @@ const (
 )
 
 // RequireRoles lists the roles that must each have at least one Ready pod on a
-// revision for that revision's candidates to survive the filter. The label key
+// revision for that revision's candidates to survive screening. The label key
 // that identifies a pod's role is RevisionGating.RoleLabelKey (parent scope).
 type RequireRoles struct {
 	Values []string `json:"values"`

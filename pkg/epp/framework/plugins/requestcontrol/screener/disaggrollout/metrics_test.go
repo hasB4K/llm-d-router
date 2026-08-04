@@ -37,7 +37,7 @@ func resetMetrics(t *testing.T) {
 	t.Helper()
 	registerMetrics()
 	headerStampedTotal.Reset()
-	filterOutcomeTotal.Reset()
+	screeningOutcomeTotal.Reset()
 	gatingDroppedTotal.Reset()
 }
 
@@ -67,43 +67,43 @@ func TestMetric_HeaderStamped_SkipsMissingLabel(t *testing.T) {
 	}
 }
 
-// --- Filter outcomes -------------------------------------------------------
+// --- Screening outcomes ----------------------------------------------------
 
-func TestMetric_FilterOutcome_Matched(t *testing.T) {
+func TestMetric_ScreeningOutcome_Matched(t *testing.T) {
 	resetMetrics(t)
 	config := validConfig()
 	config.RevisionGating = nil
 	screener := newTestScreener(config)
-	screener.filterStrictSelectors(context.Background(),
+	screener.screenStrictSelectors(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
 	)
-	got := testutil.ToFloat64(filterOutcomeTotal.WithLabelValues("revision", string(ModeStrict), filterOutcomeMatched))
+	got := testutil.ToFloat64(screeningOutcomeTotal.WithLabelValues("revision", string(ModeStrict), screeningOutcomeMatched))
 	if got != 1 {
 		t.Fatalf("matched: want 1, got %v", got)
 	}
 }
 
-func TestMetric_FilterOutcome_NoMatchStrict(t *testing.T) {
+func TestMetric_ScreeningOutcome_NoMatchStrict(t *testing.T) {
 	resetMetrics(t)
 	config := validConfig()
 	config.RevisionGating = nil
 	screener := newTestScreener(config)
-	screener.filterStrictSelectors(context.Background(),
+	screener.screenStrictSelectors(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
 	)
-	got := testutil.ToFloat64(filterOutcomeTotal.WithLabelValues("revision", string(ModeStrict), filterOutcomeNoMatchStrict))
+	got := testutil.ToFloat64(screeningOutcomeTotal.WithLabelValues("revision", string(ModeStrict), screeningOutcomeNoMatchStrict))
 	if got != 1 {
 		t.Fatalf("no_match_strict: want 1, got %v", got)
 	}
 }
 
-func TestMetric_FilterOutcome_NoMatchPreferFallback(t *testing.T) {
+func TestMetric_ScreeningOutcome_NoMatchPreferFallback(t *testing.T) {
 	resetMetrics(t)
 	screener := newTestScreener(validConfig())
 	screener.RecordPreferenceOutcome("revision", false)
-	got := testutil.ToFloat64(filterOutcomeTotal.WithLabelValues("revision", string(ModePrefer), filterOutcomeNoMatchPreferFallback))
+	got := testutil.ToFloat64(screeningOutcomeTotal.WithLabelValues("revision", string(ModePrefer), screeningOutcomeNoMatchPreferFallback))
 	if got != 1 {
 		t.Fatalf("prefer_fallback: want 1, got %v", got)
 	}

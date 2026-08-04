@@ -53,7 +53,7 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 			return nil
 		}
 	}
-	return c.filterStrictSelectors(ctx, request, current)
+	return c.screenStrictSelectors(ctx, request, current)
 }
 
 func (c *Screener) applyRevisionDecision(
@@ -78,7 +78,7 @@ func (c *Screener) applyRevisionDecision(
 	return result
 }
 
-func (c *Screener) filterStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+func (c *Screener) screenStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	current := append(make([]fwksched.Endpoint, 0, len(endpoints)), endpoints...)
 	if request == nil || len(current) == 0 {
 		return current
@@ -102,9 +102,9 @@ func (c *Screener) filterStrictSelectors(_ context.Context, request *fwksched.In
 		}
 		current = matched
 		if len(matched) == 0 {
-			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeNoMatchStrict)
+			recordScreeningOutcome(selector.Name, selector.Mode, screeningOutcomeNoMatchStrict)
 		} else {
-			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeMatched)
+			recordScreeningOutcome(selector.Name, selector.Mode, screeningOutcomeMatched)
 		}
 		if len(current) == 0 {
 			return current

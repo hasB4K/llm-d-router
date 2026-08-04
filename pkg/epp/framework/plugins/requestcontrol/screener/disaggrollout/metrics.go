@@ -40,10 +40,10 @@ var (
 		[]string{"selector"},
 	)
 
-	filterOutcomeTotal = prometheus.NewCounterVec(
+	screeningOutcomeTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Subsystem: metricsSubsystem,
-			Name:      metricsPrefix + "_filter_outcome_total",
+			Name:      metricsPrefix + "_screening_outcome_total",
 			Help:      "Per-selector outcomes: matched, no_match_strict, no_match_prefer_fallback.",
 		},
 		[]string{"selector", "mode", "outcome"},
@@ -53,7 +53,7 @@ var (
 		prometheus.CounterOpts{
 			Subsystem: metricsSubsystem,
 			Name:      metricsPrefix + "_gating_dropped_total",
-			Help:      "Requests where the gating filter dropped at least one candidate, by revision.",
+			Help:      "Requests where the gating screener dropped at least one candidate, by revision.",
 		},
 		[]string{"revision"},
 	)
@@ -67,36 +67,36 @@ func registerMetrics() {
 	registerMetricsOnce.Do(func() {
 		ctrlmetrics.Registry.MustRegister(
 			headerStampedTotal,
-			filterOutcomeTotal,
+			screeningOutcomeTotal,
 			gatingDroppedTotal,
 		)
 	})
 }
 
-// Filter outcome labels attached to disagg_filter_outcome_total. "absent"
+// Screening outcome labels attached to disagg_screening_outcome_total. "absent"
 // (no header sent) is deliberately NOT recorded. It is the silent default
 // on every request that doesn't opt in, so the counter would balloon with
 // near-zero-signal increments.
 const (
-	// filterOutcomeMatched: header matched at least one candidate. Strict mode
+	// screeningOutcomeMatched: header matched at least one candidate. Strict mode
 	// narrows the set; prefer mode gives matches a soft affinity score.
-	filterOutcomeMatched = "matched"
-	// filterOutcomeNoMatchStrict: strict-mode header matched zero candidates;
+	screeningOutcomeMatched = "matched"
+	// screeningOutcomeNoMatchStrict: strict-mode header matched zero candidates;
 	// survivor set became empty and the framework will return 503. This is
 	// the "no fallback" case operators alert on.
-	filterOutcomeNoMatchStrict = "no_match_strict"
-	// filterOutcomeNoMatchPreferFallback: prefer-mode header matched zero
+	screeningOutcomeNoMatchStrict = "no_match_strict"
+	// screeningOutcomeNoMatchPreferFallback: prefer-mode header matched zero
 	// candidates, so every candidate receives the same zero affinity. Not an
 	// error and is expected during rollouts before the client updates its header.
-	filterOutcomeNoMatchPreferFallback = "no_match_prefer_fallback"
+	screeningOutcomeNoMatchPreferFallback = "no_match_prefer_fallback"
 )
 
 func recordHeaderStamped(selectorName string) {
 	headerStampedTotal.WithLabelValues(selectorName).Inc()
 }
 
-func recordFilterOutcome(selectorName string, mode SelectorMode, outcome string) {
-	filterOutcomeTotal.WithLabelValues(selectorName, string(mode), outcome).Inc()
+func recordScreeningOutcome(selectorName string, mode SelectorMode, outcome string) {
+	screeningOutcomeTotal.WithLabelValues(selectorName, string(mode), outcome).Inc()
 }
 
 func recordGatingDropped(revision string) {

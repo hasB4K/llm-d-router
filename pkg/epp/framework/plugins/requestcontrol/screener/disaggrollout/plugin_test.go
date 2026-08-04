@@ -137,13 +137,13 @@ func TestScreenerFactoryAndPodDependency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Factory: %v", err)
 	}
-	router := plugin.(*Screener)
-	var _ fwkrc.Screener = router
-	if router.TypedName() != (fwkplugin.TypedName{Type: PluginType, Name: "rollout-screener"}) {
-		t.Fatalf("unexpected typed name: %v", router.TypedName())
+	screener := plugin.(*Screener)
+	var _ fwkrc.Screener = screener
+	if screener.TypedName() != (fwkplugin.TypedName{Type: PluginType, Name: "rollout-screener"}) {
+		t.Fatalf("unexpected typed name: %v", screener.TypedName())
 	}
 	registrar := &captureRegistrar{}
-	if err := router.RegisterDependencies(registrar); err != nil {
+	if err := screener.RegisterDependencies(registrar); err != nil {
 		t.Fatalf("RegisterDependencies: %v", err)
 	}
 	if len(registrar.registrations) != 1 {
@@ -163,7 +163,7 @@ func TestScreenerFactoryResolvesScopeNamespace(t *testing.T) {
 		want        string
 		wantError   bool
 	}{
-		{name: "router namespace default", environment: "router-system", want: "router-system"},
+		{name: "EPP namespace default", environment: "router-system", want: "router-system"},
 		{name: "configured override", configured: "model-serving", environment: "router-system", want: "model-serving"},
 		{name: "unresolved", wantError: true},
 	}
@@ -367,7 +367,7 @@ func TestRevisionModesCacheExpectedShares(t *testing.T) {
 	}
 }
 
-func TestScreenerWeightedGatingRunsBeforeStrictFilter(t *testing.T) {
+func TestScreenerWeightedGatingRunsBeforeStrictScreening(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	seedCounts(t, screener, map[string]map[string]int{
 		"v1": {"prefill": 3, "decode": 3},
@@ -481,7 +481,7 @@ func TestStrictSelectors(t *testing.T) {
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
 	got := screenCandidates(t, screener, request, candidates)
 	if len(got) != 1 || got[0].GetMetadata().Name != "v2" {
-		t.Fatalf("strict filter mismatch: %v", got)
+		t.Fatalf("strict screening mismatch: %v", got)
 	}
 	request.Headers["x-disagg-revision"] = "missing"
 	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
