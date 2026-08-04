@@ -1,5 +1,5 @@
 /*
-Copyright 2026 The Kubernetes Authors.
+Copyright 2025 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -362,6 +362,7 @@ func buildSchedulerConfig(
 					"plugin '%s' referenced in profile '%s' not found in handle",
 					pluginRef.PluginRef, cfgProfile.Name)
 			}
+
 			// Wrap Scorers with weights.
 			if scorer, ok := plugin.(fwksched.Scorer); ok {
 				weight := DefaultScorerWeight
