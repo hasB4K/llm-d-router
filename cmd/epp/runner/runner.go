@@ -124,6 +124,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/profilehandler/single"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/activerequest"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/contextlengthaware"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/disaggprefer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/endpointattribute"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/kvcacheutilization"
 	latencyscorer "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/latency"
@@ -555,10 +556,10 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(disaggrollout.PluginType, fwkplugin.StabilityAlpha, disaggrollout.Factory)
 	fwkplugin.RegisterWithPluginDependencies(
-		disaggrollout.PreferScorerType,
+		disaggprefer.PluginType,
 		fwkplugin.StabilityAlpha,
-		disaggrollout.PreferScorerFactory,
-		disaggrollout.PreferScorerConfigParser,
+		disaggprefer.Factory,
+		disaggprefer.ConfigParser,
 	)
 
 	// bylabel role filters
@@ -772,8 +773,6 @@ func makePodListFunc(ds datastore.Datastore) func() []types.NamespacedName {
 
 func (r *Runner) parseConfigurationPhaseTwo(ctx context.Context, rawConfig *configapi.EndpointPickerConfig, ds datastore.Datastore) (*config.Config, error) {
 	logger := log.FromContext(ctx)
-
-	applyDeprecatedEnvFeatureGate(enableExperimentalFlowControlLayer, "Flow Control layer", flowcontrol.FeatureGate, rawConfig)
 
 	handle := fwkplugin.NewEppHandle(ctx, makePodListFunc(ds), fwkplugin.WithMetricsRecorder(ctrlmetrics.Registry))
 	r.PluginHandle = handle

@@ -18,12 +18,8 @@ package disaggrollout
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"sort"
 
-	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
@@ -181,102 +177,4 @@ func (c *Screener) pickWeightedRevision(shares map[string]float64) string {
 		}
 	}
 	return revisions[len(revisions)-1]
-}
-
-type preferScorerParameters struct {
-	RouterRef string `json:"routerRef" pluginRef:""`
-}
-
-// PreferScorerConfigParser exposes routerRef to the plugin dependency loader.
-func PreferScorerConfigParser(parameters *json.Decoder, _ fwkplugin.Handle) (any, error) {
-	config := preferScorerParameters{}
-	if parameters == nil {
-		return nil, errors.New("disaggregation-prefer-scorer requires parameters")
-	}
-	if err := parameters.Decode(&config); err != nil {
-		return nil, fmt.Errorf("decode disaggregation-prefer-scorer parameters: %w", err)
-	}
-	if config.RouterRef == "" {
-		return nil, errors.New("routerRef is required")
-	}
-	return config, nil
-}
-
-// PreferScorerFactory creates a soft-affinity scorer using the referenced
-// router's prefer selectors.
-func PreferScorerFactory(name string, parameters *json.Decoder, handle fwkplugin.Handle) (fwkplugin.Plugin, error) {
-	parsed, err := PreferScorerConfigParser(parameters, handle)
-	if err != nil {
-		return nil, err
-	}
-	config := parsed.(preferScorerParameters)
-	plugin := handle.Plugin(config.RouterRef)
-	router, ok := plugin.(*Screener)
-	if !ok {
-		return nil, fmt.Errorf("routerRef %q is not a %s plugin", config.RouterRef, PluginType)
-	}
-	if !router.config.HasHeaderSelectorsInMode(ModePrefer) {
-		return nil, fmt.Errorf("routerRef %q has no prefer-mode header selectors", config.RouterRef)
-	}
-	if name == "" {
-		name = PreferScorerType
-	}
-	return &preferScorer{
-		typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: name},
-		router:    router,
-	}, nil
-}
-
-type preferScorer struct {
-	typedName fwkplugin.TypedName
-	router    *Screener
-}
-
-var _ fwksched.Scorer = (*preferScorer)(nil)
-
-func (s *preferScorer) TypedName() fwkplugin.TypedName { return s.typedName }
-
-func (s *preferScorer) Category() fwksched.ScorerCategory { return fwksched.Affinity }
-
-func (s *preferScorer) Score(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) map[fwksched.Endpoint]float64 {
-	scores := make(map[fwksched.Endpoint]float64, len(endpoints))
-	for _, endpoint := range endpoints {
-		scores[endpoint] = 0
-	}
-	if request == nil {
-		return scores
-	}
-
-	activeSelectors := 0
-	for _, selector := range s.router.config.HeaderSelectors {
-		if selector.Mode != ModePrefer {
-			continue
-		}
-		requested := request.Headers[selector.HeaderName]
-		if requested == "" {
-			continue
-		}
-		activeSelectors++
-		matched := false
-		for _, endpoint := range endpoints {
-			if endpoint == nil || endpoint.GetMetadata() == nil {
-				continue
-			}
-			if endpoint.GetMetadata().Labels[selector.LabelKey] == requested {
-				scores[endpoint]++
-				matched = true
-			}
-		}
-		if matched {
-			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeMatched)
-		} else {
-			recordFilterOutcome(selector.Name, selector.Mode, filterOutcomeNoMatchPreferFallback)
-		}
-	}
-	if activeSelectors > 1 {
-		for endpoint := range scores {
-			scores[endpoint] /= float64(activeSelectors)
-		}
-	}
-	return scores
 }

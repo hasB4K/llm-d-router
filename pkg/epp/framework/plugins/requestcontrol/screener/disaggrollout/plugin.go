@@ -41,10 +41,7 @@ import (
 const (
 	// PluginType is the plugin type for revision gating, strict header
 	// filtering, and response-header stamping.
-	PluginType = "disagg-rollout-screener"
-	// PreferScorerType is the plugin type for soft header-label affinity.
-	PreferScorerType = "disaggregation-prefer-scorer"
-
+	PluginType       = "disagg-rollout-screener"
 	podExtractorType = "disagg-rollout-pod-extractor"
 )
 
@@ -128,6 +125,27 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 }
 
 func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
+
+// PreferenceSelectors returns the configured soft-affinity selectors.
+func (c *Screener) PreferenceSelectors() []HeaderSelector {
+	selectors := make([]HeaderSelector, 0, len(c.config.HeaderSelectors))
+	for _, selector := range c.config.HeaderSelectors {
+		if selector.Mode == ModePrefer {
+			selectors = append(selectors, selector)
+		}
+	}
+	return selectors
+}
+
+// RecordPreferenceOutcome records whether a prefer selector matched at least
+// one candidate.
+func (c *Screener) RecordPreferenceOutcome(selectorName string, matched bool) {
+	if matched {
+		recordFilterOutcome(selectorName, ModePrefer, filterOutcomeMatched)
+		return
+	}
+	recordFilterOutcome(selectorName, ModePrefer, filterOutcomeNoMatchPreferFallback)
+}
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
 // source. No controller-runtime Manager or Kubernetes client enters the plugin.

@@ -35,7 +35,6 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	testutils "github.com/llm-d/llm-d-router/test/utils"
 )
 
 const (
@@ -487,71 +486,6 @@ func TestStrictSelectors(t *testing.T) {
 	request.Headers["x-disagg-revision"] = "missing"
 	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
 		t.Fatalf("strict no-match must be empty: %v", got)
-	}
-}
-
-func TestPreferScorerScoresMatchesWithoutRemovingCandidates(t *testing.T) {
-	config := validConfig()
-	config.RevisionGating = nil
-	config.HeaderSelectors[0].Mode = ModePrefer
-	router := newTestScreener(config)
-	scorer := &preferScorer{typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: "prefer"}, router: router}
-	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
-	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
-	scores := scorer.Score(context.Background(), request, candidates)
-	if scores[candidates[0]] != 0 || scores[candidates[1]] != 1 {
-		t.Fatalf("unexpected prefer scores: %v", scores)
-	}
-	request.Headers["x-disagg-revision"] = "missing"
-	scores = scorer.Score(context.Background(), request, candidates)
-	if len(scores) != len(candidates) || scores[candidates[0]] != 0 || scores[candidates[1]] != 0 {
-		t.Fatalf("no-match must leave every candidate at zero: %v", scores)
-	}
-	if scorer.Category() != fwksched.Affinity {
-		t.Fatalf("prefer scorer category = %q, want %q", scorer.Category(), fwksched.Affinity)
-	}
-}
-
-func TestPreferScorerAveragesMultipleSelectors(t *testing.T) {
-	config := validConfig()
-	config.RevisionGating = nil
-	config.HeaderSelectors[0].Mode = ModePrefer
-	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
-		Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "llm-d.ai/slice", Mode: ModePrefer,
-	})
-	router := newTestScreener(config)
-	scorer := &preferScorer{typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: "prefer"}, router: router}
-	candidates := []fwksched.Endpoint{
-		endpoint("both", map[string]string{testRevLabel: "v2", "llm-d.ai/slice": "s2"}),
-		endpoint("revision", map[string]string{testRevLabel: "v2", "llm-d.ai/slice": "s1"}),
-		endpoint("neither", map[string]string{testRevLabel: "v1", "llm-d.ai/slice": "s1"}),
-	}
-	request := &fwksched.InferenceRequest{Headers: map[string]string{
-		"x-disagg-revision": "v2",
-		"x-disagg-slice":    "s2",
-	}}
-
-	scores := scorer.Score(context.Background(), request, candidates)
-
-	if scores[candidates[0]] != 1 || scores[candidates[1]] != 0.5 || scores[candidates[2]] != 0 {
-		t.Fatalf("unexpected multi-selector scores: %v", scores)
-	}
-}
-
-func TestPreferScorerFactoryLinksRouter(t *testing.T) {
-	config := validConfig()
-	config.HeaderSelectors[0].Mode = ModePrefer
-	router := newTestScreener(config)
-	handle := testutils.NewTestHandle(context.Background())
-	handle.AddPlugin("test-router", router)
-	raw := json.RawMessage(`{"routerRef":"test-router"}`)
-	plugin, err := PreferScorerFactory("prefer", fwkplugin.StrictDecoder(raw), handle)
-	if err != nil {
-		t.Fatalf("PreferScorerFactory: %v", err)
-	}
-	scorer := plugin.(*preferScorer)
-	if scorer.router != router {
-		t.Fatal("prefer scorer did not retain its router reference")
 	}
 }
 

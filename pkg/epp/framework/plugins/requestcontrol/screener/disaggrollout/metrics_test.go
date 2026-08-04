@@ -101,15 +101,8 @@ func TestMetric_FilterOutcome_NoMatchStrict(t *testing.T) {
 
 func TestMetric_FilterOutcome_NoMatchPreferFallback(t *testing.T) {
 	resetMetrics(t)
-	config := validConfig()
-	config.RevisionGating = nil
-	config.HeaderSelectors[0].Mode = ModePrefer
-	screener := newTestScreener(config)
-	scorer := &preferScorer{router: screener}
-	scorer.Score(context.Background(),
-		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
-		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
-	)
+	screener := newTestScreener(validConfig())
+	screener.RecordPreferenceOutcome("revision", false)
 	got := testutil.ToFloat64(filterOutcomeTotal.WithLabelValues("revision", string(ModePrefer), filterOutcomeNoMatchPreferFallback))
 	if got != 1 {
 		t.Fatalf("prefer_fallback: want 1, got %v", got)
