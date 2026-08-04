@@ -10,10 +10,18 @@ scorer, or picker.
 
 ## Why Revision Screening Is Needed
 
-A `DisaggregatedSet` creates a new revision when any role changes. Every Pod in
-that revision has the same `disaggregatedset.x-k8s.io/revision` label. The label
-therefore identifies the prefill and decode Pods that were created from the
-same role templates and should be treated as a compatibility boundary.
+A `DisaggregatedSet` revision represents one complete version of the whole
+disaggregated deployment, including every role. If the configuration of any
+role changes, the controller creates a new revision for the entire
+`DisaggregatedSet`. All prefill and decode Pods created for that version receive
+the same `disaggregatedset.x-k8s.io/revision` label, while Pods from the previous
+version retain their old revision label.
+
+The router uses this label as a compatibility boundary: a prefill Pod and a
+decode Pod may serve the same request only when their revision labels are
+equal. For example, it may pair a prefill Pod labeled `rev-A` with a decode Pod
+labeled `rev-A`, but never a prefill Pod labeled `rev-A` with a decode Pod
+labeled `rev-B`.
 
 Pairing Pods from different revisions can be troublesome:
 
@@ -37,19 +45,20 @@ old revision A      2         9
 new revision B      1         1
 ```
 
-Selecting a revision from the prefill pool alone would send about 2/3 of
-requests to A and 1/3 to B. However, B has only 1 of the 10 decode Pods and can
-represent only about 10 percent of decode capacity. That can overload B's
-decode side while leaving A's decode capacity unused.
+Selecting a revision from the prefill pool alone would send about 67% of
+requests to A and 33% to B. However, B has only 1 of the 10 decode Pods and can
+represent only about 10% of decode capacity. That can overload B's decode side
+while leaving A's decode capacity unused.
 
 The
 [DisaggregatedSet rollout KEP](https://github.com/kubernetes-sigs/lws/tree/main/keps/766-DisaggregatedSet)
 explains how the controller keeps role progress as close as integer replica
-counts permit. Run its rollout planner from the root of a
-[`kubernetes-sigs/lws`](https://github.com/kubernetes-sigs/lws) checkout. Using
-`maxUnavailable: 2` for both roles keeps this example short:
+counts permit. To inspect a concrete rollout, run the planner from the root of a
+[`kubernetes-sigs/lws`](https://github.com/kubernetes-sigs/lws) checkout. This
+example uses a 2P:10D deployment with `maxUnavailable: 2` for both roles:
 
 ```bash
+cd "$(go env GOPATH)/src/github.com/kubernetes-sigs/lws"
 go run ./hack/plan-steps \
   --source '{"prefill": 2, "decode": 10}' \
   --target '{"prefill": 2, "decode": 10}' \
