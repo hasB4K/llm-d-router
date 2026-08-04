@@ -3,55 +3,186 @@
 **Type:** `disaggregatedset-rollout-screener`
 **Interfaces:** `requestcontrol.Screener`, `requestcontrol.ResponseHeaderProcessor`
 
-Screens located endpoints before data producers, admission plugins, and scheduling profiles run. It keeps incompatible prefill and decode revisions from being paired during a `DisaggregatedSet` rollout.
+This plugin prevents incompatible prefill and decode Pods from serving the same
+request during a `DisaggregatedSet` rollout. It runs before every scheduling
+profile, so the compatibility constraint cannot be undone by a later filter,
+scorer, or picker.
 
-Most endpoint-selection plugins should implement a scheduling `Filter`. Use this Screener only for constraints that must apply globally to every scheduling profile.
+Most endpoint-selection plugins should be scheduling filters. Use a Screener
+only for a constraint, such as revision compatibility, that must apply to every
+scheduling profile.
 
-## What It Does
+## Why Revision Screening Is Needed
 
-The plugin can apply two mandatory constraints:
+A `DisaggregatedSet` creates a new revision when any role changes. Every Pod in
+that revision has the same `disaggregatedset.x-k8s.io/revision` label. The label
+therefore identifies the prefill and decode Pods that were created from the
+same role templates and should be treated as a compatibility boundary.
 
-1. **Revision coverage:** a revision is eligible only when every configured role has at least one Ready Pod.
-2. **Strict header selection:** when a configured request header is present, only endpoints whose label matches that value remain eligible.
+Pairing Pods from different revisions can make incompatible KV-cache formats,
+model code, or runtime versions communicate. Depending on the change, that can
+cause corrupted output, process crashes, or failed requests. See
+[llm-d-router issue #2143](https://github.com/llm-d/llm-d-router/issues/2143)
+for the motivating failure modes.
 
-If several revisions have complete role coverage, the Screener chooses one revision using the configured rollout weight:
+Rolling out all roles at exactly the same percentage is not always possible.
+Replica counts are integers, and each role is constrained by its own surge and
+unavailable limits. For example, consider a deployment whose stable shape is
+2 prefill Pods and 10 decode Pods. An intermediate state can be:
 
-- `sum`: `sum(Ready Pods for each required role)`
-- `max-role`: `max(Ready Pods among the required roles)`
+```text
+                 prefill   decode
+old revision A      2         9
+new revision B      1         1
+```
 
-The selected endpoint's configured labels are written to response headers. A coordinator or client can forward those headers to a later decode request, which keeps both request legs on the same revision.
+Selecting a revision from the prefill pool alone would send about 2/3 of
+requests to A and 1/3 to B. However, B has only 1 of the 10 decode Pods and can
+represent only about 10 percent of decode capacity. That can overload B's
+decode side while leaving A's decode capacity unused.
 
-## Fail-Closed Behavior
+The
+[DisaggregatedSet rollout KEP](https://github.com/kubernetes-sigs/lws/tree/main/keps/766-DisaggregatedSet)
+explains how the controller keeps role progress as close as integer replica
+counts permit. Its rollout planner can show the individual steps:
 
-With active revision gating, a revision share of zero is not eligible:
+```bash
+go run ./hack/plan-steps \
+  --source '{"prefill": 2, "decode": 10}' \
+  --target '{"prefill": 2, "decode": 10}' \
+  --surge '{"prefill": 0, "decode": 0}' \
+  --unavailable '{"prefill": 1, "decode": 1}'
+```
 
-- For a revision present in the observed Pod counts, zero means at least one required role has no Ready Pods.
-- A revision absent from the cached distribution, including while Pod notifications are still warming the cache, also resolves to zero.
+## Request Lifecycle
 
-Both cases are intentionally fail-closed. If screening removes every located endpoint, request control returns HTTP 503. This differs from omitting `revisionGating` or setting its mode to `disabled`, which disables revision gating entirely.
+For every Pod notification, the plugin caches the Ready Pod count by revision
+and role. For a request without a strict revision header, it then:
 
-A strict header with no matching endpoint also removes every candidate and returns HTTP 503. The plugin never silently crosses revisions or substitutes a different strict label value.
+1. Removes every revision that has no Ready Pod for any required role.
+2. Computes a weight for each remaining revision.
+3. Randomly chooses one revision using those weights.
+4. Exposes only that revision's endpoints to all scheduling profiles.
+5. Stamps the selected endpoint's revision into the configured response header.
 
-## Parameters
+```text
+Ready Pod counts
+       |
+       v
+remove incomplete revisions -> choose one covered revision
+       |                               |
+       +-------------------------------+
+                                       v
+                        filters, scorers, and picker
+                                       |
+                                       v
+                         stamp the selected revision
+```
 
-| Name | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `scope.labelSelector` | string | Yes | | Selects the Pods observed for cross-role revision coverage. |
-| `scope.namespace` | string | No | EPP Pod `NAMESPACE` | Namespace containing the disaggregated inference Pods. |
-| `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening, preference scoring, and response-header stamping. |
-| `revisionGating.mode` | string | Yes when gating is configured | | `sum`, `max-role`, or `disabled`. |
-| `revisionGating.requireRoles.values` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. |
-| `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
-| `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
+When a strict revision header is already present, the plugin does not make a
+new weighted choice. It checks that the requested revision has all required
+roles and keeps only endpoints with that revision.
 
-Each `headerSelectors` entry has:
+### Two EPPs
 
-| Name | Type | Description |
-|---|---|---|
-| `name` | string | Stable selector name used by metrics. |
-| `headerName` | string | Request and response header carrying the selected label value. |
-| `labelKey` | string | Endpoint label compared with the header. |
-| `mode` | string | `strict` screens candidates globally; `prefer` is consumed by the separate preference scorer. |
+The prefill EPP chooses a covered revision and stamps it. The coordinator must
+forward that header to the decode request. The decode EPP then applies the
+header strictly:
+
+```text
+prefill request -> choose revision A -> stamp revision A
+                                             |
+                                             v
+decode request with revision A -> keep only revision A decodes
+```
+
+### One EPP
+
+The Screener runs once before the disaggregated scheduling profiles. Choosing
+one revision up front gives the decode and prefill profiles the same restricted
+candidate set, so they cannot independently select different revisions.
+
+## Revision Gating Modes
+
+### `max-role`
+
+The weight of a revision is the largest Ready Pod count among the required
+roles:
+
+```text
+weight(revision) = max(ready prefill Pods, ready decode Pods)
+```
+
+For the 2P:10D example:
+
+```text
+A: max(2, 9) = 9
+B: max(1, 1) = 1
+traffic: A 90 percent, B 10 percent
+```
+
+This mode is useful for a stable, intentionally asymmetric role ratio such as
+2P:10D or 10P:2D. It assumes that the more numerous role is a reasonable proxy
+for the deployment's traffic-limiting capacity. It is less reliable when the
+deployment changes between prefill-heavy and decode-heavy shapes or when the
+role ratios differ substantially between revisions.
+
+### `sum`
+
+The weight of a revision is the total number of Ready Pods across the required
+roles:
+
+```text
+weight(revision) = sum(Ready Pods for every required role)
+```
+
+For the same example:
+
+```text
+A: 2 + 9 = 11
+B: 1 + 1 = 2
+traffic: A 84.6 percent, B 15.4 percent
+```
+
+`sum` uses progress from every role and is a more general heuristic when role
+ratios can change because of scaling, readiness changes, or a topology change.
+When every revision has the same P:D ratio, `sum` and `max-role` produce the
+same traffic percentages.
+
+Neither mode is an exact capacity model. Exact weighting would require the
+relative request capacity of a prefill Pod and a decode Pod, not only their
+counts.
+
+### `disabled`
+
+This mode disables revision coverage checks and weighted revision selection.
+It does **not** disable header selectors or response-header stamping:
+
+- With no revision header, all located candidates continue to filters,
+  scorers, and the picker.
+- The selected endpoint's configured labels are still stamped on the response.
+- With a revision header, a `strict` selector still keeps only matching
+  endpoints and fails if none match.
+
+This supports a two-EPP flow where normal scheduling chooses the prefill, its
+revision is stamped, and the coordinator forwards that revision to the decode
+EPP. It is safe only when that header is reliably forwarded. Because coverage
+is disabled, selecting a prefill revision with no matching Ready decode causes
+the later strict decode request to fail rather than cross revisions.
+
+`disabled` alone does not keep the profiles of a single EPP on one revision.
+There is no response-header boundary between its profile executions, so the
+profiles need revision gating to receive the same candidate set.
+
+## Header Selectors
+
+| Mode | Behavior |
+|---|---|
+| `strict` | Keeps only endpoints whose label equals the request header. No match fails closed. |
+| `prefer` | Declares a soft affinity consumed by the separate [`disaggregatedset-prefer-scorer`](../../../scheduling/scorer/disaggregatedsetprefer/README.md). Non-matching endpoints remain eligible. |
+
+Every selector also stamps its configured response header from the endpoint
+that served the request. Stamping is independent of the revision gating mode.
 
 ## Configuration
 
@@ -76,16 +207,39 @@ plugins:
         values: [prefill, decode]
 ```
 
-The Screener is discovered from the top-level `plugins` list and runs once per request. Do not add it to a scheduling profile.
+The Screener is discovered from the top-level `plugins` list and runs once per
+request. Do not add it to a scheduling profile.
 
-## Topologies
+## Parameters
 
-The same configuration supports:
+| Name | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `scope.labelSelector` | string | Yes | | Selects the Pods observed for cross-role revision coverage. |
+| `scope.namespace` | string | No | EPP Pod `NAMESPACE` | Namespace containing the disaggregated inference Pods. |
+| `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening, preference scoring, and response-header stamping. |
+| `revisionGating.mode` | string | Yes when gating is configured | | `sum`, `max-role`, or `disabled`. |
+| `revisionGating.requireRoles.values` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. |
+| `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
+| `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
 
-- one EPP running separate prefill and decode scheduling profiles;
-- separate prefill and decode EPPs observing the same `DisaggregatedSet` Pod scope.
+Each `headerSelectors` entry has:
 
-For two EPPs, the prefill-side coordinator must forward the stamped revision header to the decode-side request.
+| Name | Type | Description |
+|---|---|---|
+| `name` | string | Stable selector name used by metrics. |
+| `headerName` | string | Request and response header carrying the selected label value. |
+| `labelKey` | string | Endpoint label compared with the header. |
+| `mode` | string | `strict` screens candidates globally; `prefer` is consumed by the separate preference scorer. |
+
+## Fail-Closed Behavior
+
+With `sum` or `max-role`, a revision is ineligible until every required role
+has at least one Ready Pod. This also means requests fail closed while the Pod
+notification cache is warming. If no revision survives, request control
+returns HTTP 503.
+
+A strict header with no matching endpoint also returns HTTP 503. The plugin
+never silently substitutes another revision or crosses revisions.
 
 ## Metrics
 
@@ -93,4 +247,4 @@ For two EPPs, the prefill-side coordinator must forward the stamped revision hea
 - `llm_d_epp_disaggregatedset_screening_outcome_total`
 - `llm_d_epp_disaggregatedset_gating_dropped_total`
 
-All metrics are labeled with bounded selector, mode, outcome, or revision values as appropriate.
+Metrics use bounded selector, mode, outcome, or revision labels as applicable.

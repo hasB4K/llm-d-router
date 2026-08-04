@@ -497,3 +497,14 @@ func TestResponseHeaderStampsSelectors(t *testing.T) {
 		t.Fatalf("revision header not stamped: %#v", response.Headers)
 	}
 }
+
+func TestResponseHeaderStampsSelectorsWithGatingDisabled(t *testing.T) {
+	config := validConfig()
+	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
+	screener := newTestScreener(config)
+	response := &fwkrc.Response{Headers: map[string]string{}}
+	screener.ResponseHeader(context.Background(), nil, response, &fwkdl.EndpointMetadata{Labels: revLabels("v1")})
+	if response.Headers["x-disagg-revision"] != "v1" {
+		t.Fatalf("revision header not stamped with gating disabled: %#v", response.Headers)
+	}
+}
