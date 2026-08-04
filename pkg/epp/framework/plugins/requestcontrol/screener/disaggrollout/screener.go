@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggregation
+package disaggrollout
 
 import (
 	"context"
@@ -29,7 +29,7 @@ import (
 
 // Screen applies revision gating and strict selectors before scheduling
 // profiles observe the endpoint set.
-func (c *Controller) Screen(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	current := append(make([]fwksched.Endpoint, 0, len(endpoints)), endpoints...)
 	if c.config.RevisionGating.Active() {
 		if request == nil {
@@ -60,7 +60,7 @@ func (c *Controller) Screen(ctx context.Context, request *fwksched.InferenceRequ
 	return c.filterStrictSelectors(ctx, request, current)
 }
 
-func (c *Controller) applyRevisionDecision(
+func (c *Screener) applyRevisionDecision(
 	endpoints []fwksched.Endpoint,
 	allowedRevisions map[string]struct{},
 	chosenRevision string,
@@ -82,7 +82,7 @@ func (c *Controller) applyRevisionDecision(
 	return result
 }
 
-func (c *Controller) filterStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+func (c *Screener) filterStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	current := append(make([]fwksched.Endpoint, 0, len(endpoints)), endpoints...)
 	if request == nil || len(current) == 0 {
 		return current
@@ -117,7 +117,7 @@ func (c *Controller) filterStrictSelectors(_ context.Context, request *fwksched.
 	return current
 }
 
-func (c *Controller) hasStrictHeader(request *fwksched.InferenceRequest) bool {
+func (c *Screener) hasStrictHeader(request *fwksched.InferenceRequest) bool {
 	if request == nil {
 		return false
 	}
@@ -158,7 +158,7 @@ func revisionWeight(perRole map[string]int, required []string, useMaxRole bool) 
 	return weight
 }
 
-func (c *Controller) pickWeightedRevision(shares map[string]float64) string {
+func (c *Screener) pickWeightedRevision(shares map[string]float64) string {
 	revisions := make([]string, 0, len(shares))
 	total := 0.0
 	for revision, share := range shares {
@@ -211,9 +211,9 @@ func PreferScorerFactory(name string, parameters *json.Decoder, handle fwkplugin
 	}
 	config := parsed.(preferScorerParameters)
 	plugin := handle.Plugin(config.RouterRef)
-	router, ok := plugin.(*Controller)
+	router, ok := plugin.(*Screener)
 	if !ok {
-		return nil, fmt.Errorf("routerRef %q is not a %s plugin", config.RouterRef, RouterType)
+		return nil, fmt.Errorf("routerRef %q is not a %s plugin", config.RouterRef, PluginType)
 	}
 	if !router.config.HasHeaderSelectorsInMode(ModePrefer) {
 		return nil, fmt.Errorf("routerRef %q has no prefer-mode header selectors", config.RouterRef)
@@ -229,7 +229,7 @@ func PreferScorerFactory(name string, parameters *json.Decoder, handle fwkplugin
 
 type preferScorer struct {
 	typedName fwkplugin.TypedName
-	router    *Controller
+	router    *Screener
 }
 
 var _ fwksched.Scorer = (*preferScorer)(nil)

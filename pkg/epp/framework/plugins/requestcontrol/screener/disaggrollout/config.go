@@ -34,7 +34,7 @@ limitations under the License.
 // notification source, applies gating and strict selectors before scheduling,
 // and stamps response headers. A prefer scorer references the router and adds
 // soft affinity scores within a scheduling profile.
-package disaggregation
+package disaggrollout
 
 import (
 	"encoding/json"
@@ -52,7 +52,7 @@ const (
 	DefaultRoleLabel     = "disaggregatedset.x-k8s.io/role"
 )
 
-// Config is the parameters block of a disaggregation-router plugin.
+// Config is the parameters block of a disagg-rollout-screener plugin.
 type Config struct {
 	Scope           Scope            `json:"scope"`
 	HeaderSelectors []HeaderSelector `json:"headerSelectors"`

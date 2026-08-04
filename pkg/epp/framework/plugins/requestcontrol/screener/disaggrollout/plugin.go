@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggregation
+package disaggrollout
 
 import (
 	"context"
@@ -39,20 +39,20 @@ import (
 )
 
 const (
-	// RouterType is the plugin type for revision gating, strict header
+	// PluginType is the plugin type for revision gating, strict header
 	// filtering, and response-header stamping.
-	RouterType = "disaggregation-router"
+	PluginType = "disagg-rollout-screener"
 	// PreferScorerType is the plugin type for soft header-label affinity.
 	PreferScorerType = "disaggregation-prefer-scorer"
 
-	podExtractorType = "disaggregation-pod-extractor"
+	podExtractorType = "disagg-rollout-pod-extractor"
 )
 
 var podGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
 
-// Controller gates revisions and applies strict selectors before scheduling.
+// Screener gates revisions and applies strict selectors before scheduling.
 // ResponseHeader stamps the selected endpoint's labels.
-type Controller struct {
+type Screener struct {
 	typedName        fwkplugin.TypedName
 	config           Config
 	scope            labels.Selector
@@ -76,24 +76,24 @@ type revisionDistribution struct {
 }
 
 var (
-	_ fwkplugin.Plugin              = (*Controller)(nil)
-	_ fwkrc.Screener                = (*Controller)(nil)
-	_ fwkrc.ResponseHeaderProcessor = (*Controller)(nil)
-	_ fwkdl.Registrant              = (*Controller)(nil)
+	_ fwkplugin.Plugin              = (*Screener)(nil)
+	_ fwkrc.Screener                = (*Screener)(nil)
+	_ fwkrc.ResponseHeaderProcessor = (*Screener)(nil)
+	_ fwkdl.Registrant              = (*Screener)(nil)
 	_ fwkdl.NotificationExtractor   = (*podNotificationHandler)(nil)
 )
 
-// RouterFactory creates a disaggregation-router from normal plugin parameters.
-func RouterFactory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
+// Factory creates a disagg-rollout-screener from normal plugin parameters.
+func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
 	if name == "" {
-		name = RouterType
+		name = PluginType
 	}
 	config := Config{}
 	if parameters == nil {
-		return nil, errors.New("disaggregation-router requires parameters")
+		return nil, errors.New("disagg-rollout-screener requires parameters")
 	}
 	if err := parameters.Decode(&config); err != nil {
-		return nil, fmt.Errorf("decode disaggregation-router parameters: %w", err)
+		return nil, fmt.Errorf("decode disagg-rollout-screener parameters: %w", err)
 	}
 	if config.Scope.Namespace == "" {
 		config.Scope.Namespace = os.Getenv("NAMESPACE")
@@ -106,18 +106,18 @@ func RouterFactory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (f
 		return nil, fmt.Errorf("parse scope.labelSelector: %w", err)
 	}
 	registerMetrics()
-	return newController(name, config, scope), nil
+	return newScreener(name, config, scope), nil
 }
 
-func newController(name string, config Config, scope labels.Selector) *Controller {
+func newScreener(name string, config Config, scope labels.Selector) *Screener {
 	revisionLabelKey := ""
 	roleLabelKey := ""
 	if config.RevisionGating != nil {
 		revisionLabelKey = config.RevisionGating.RevisionLabelKey
 		roleLabelKey = config.RevisionGating.RoleLabelKey
 	}
-	return &Controller{
-		typedName:        fwkplugin.TypedName{Type: RouterType, Name: name},
+	return &Screener{
+		typedName:        fwkplugin.TypedName{Type: PluginType, Name: name},
 		config:           config,
 		scope:            scope,
 		revisionLabelKey: revisionLabelKey,
@@ -127,12 +127,12 @@ func newController(name string, config Config, scope labels.Selector) *Controlle
 	}
 }
 
-func (c *Controller) TypedName() fwkplugin.TypedName { return c.typedName }
+func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
 // source. No controller-runtime Manager or Kubernetes client enters the plugin.
-func (c *Controller) RegisterDependencies(registrar fwkdl.Registrar) error {
-	handler := &podNotificationHandler{controller: c}
+func (c *Screener) RegisterDependencies(registrar fwkdl.Registrar) error {
+	handler := &podNotificationHandler{screener: c}
 	return registrar.Register(fwkdl.PendingRegistration{
 		Owner:      c.typedName,
 		SourceType: sourcenotifications.NotificationSourceType,
@@ -146,7 +146,7 @@ func (c *Controller) RegisterDependencies(registrar fwkdl.Registrar) error {
 }
 
 // ResponseHeader stamps configured selector values from the selected endpoint.
-func (c *Controller) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, endpoint *fwkdl.EndpointMetadata) {
+func (c *Screener) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, endpoint *fwkdl.EndpointMetadata) {
 	if endpoint == nil || response == nil || response.Headers == nil {
 		return
 	}
@@ -159,11 +159,11 @@ func (c *Controller) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequ
 }
 
 type podNotificationHandler struct {
-	controller *Controller
+	screener *Screener
 }
 
 func (h *podNotificationHandler) TypedName() fwkplugin.TypedName {
-	return fwkplugin.TypedName{Type: podExtractorType, Name: h.controller.typedName.Name + "/pod"}
+	return fwkplugin.TypedName{Type: podExtractorType, Name: h.screener.typedName.Name + "/pod"}
 }
 
 func (h *podNotificationHandler) GVK() schema.GroupVersionKind { return podGVK }
@@ -174,7 +174,7 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 	}
 	key := types.NamespacedName{Name: event.Object.GetName(), Namespace: event.Object.GetNamespace()}
 	if event.Type == fwkdl.EventDelete {
-		h.controller.removePod(key)
+		h.screener.removePod(key)
 		return nil
 	}
 
@@ -182,22 +182,22 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(event.Object.Object, pod); err != nil {
 		return fmt.Errorf("convert Pod notification %s: %w", key, err)
 	}
-	if !h.controller.acceptsPod(pod) {
-		h.controller.removePod(key)
+	if !h.screener.acceptsPod(pod) {
+		h.screener.removePod(key)
 		return nil
 	}
 
-	h.controller.mu.Lock()
-	h.controller.pods[key] = podInfo{
-		revision: pod.Labels[h.controller.revisionLabelKey],
-		role:     pod.Labels[h.controller.roleLabelKey],
+	h.screener.mu.Lock()
+	h.screener.pods[key] = podInfo{
+		revision: pod.Labels[h.screener.revisionLabelKey],
+		role:     pod.Labels[h.screener.roleLabelKey],
 	}
-	h.controller.rebuildDistributionLocked()
-	h.controller.mu.Unlock()
+	h.screener.rebuildDistributionLocked()
+	h.screener.mu.Unlock()
 	return nil
 }
 
-func (c *Controller) acceptsPod(pod *corev1.Pod) bool {
+func (c *Screener) acceptsPod(pod *corev1.Pod) bool {
 	if pod == nil || !c.config.RevisionGating.Active() {
 		return false
 	}
@@ -210,14 +210,14 @@ func (c *Controller) acceptsPod(pod *corev1.Pod) bool {
 	return pod.Labels[c.revisionLabelKey] != "" && pod.Labels[c.roleLabelKey] != ""
 }
 
-func (c *Controller) removePod(key types.NamespacedName) {
+func (c *Screener) removePod(key types.NamespacedName) {
 	c.mu.Lock()
 	delete(c.pods, key)
 	c.rebuildDistributionLocked()
 	c.mu.Unlock()
 }
 
-func (c *Controller) rebuildDistributionLocked() {
+func (c *Screener) rebuildDistributionLocked() {
 	var requiredRoles []string
 	var mode GatingMode
 	if c.config.RevisionGating.Active() {
@@ -259,7 +259,7 @@ func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles
 	return revisionDistribution{roleCounts: roleCounts, shares: shares}
 }
 
-func (c *Controller) distributionSnapshot() revisionDistribution {
+func (c *Screener) distributionSnapshot() revisionDistribution {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.distribution

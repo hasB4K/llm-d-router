@@ -17,7 +17,7 @@ limitations under the License.
 // Metric tests share process-global Prometheus collectors registered once
 // via sync.Once. Do NOT call t.Parallel() in this file because the shared
 // registry would race.
-package disaggregation
+package disaggrollout
 
 import (
 	"context"
@@ -45,8 +45,8 @@ func resetMetrics(t *testing.T) {
 
 func TestMetric_HeaderStamped_IncrementsPerSelector(t *testing.T) {
 	resetMetrics(t)
-	controller := newTestController(validConfig())
-	controller.ResponseHeader(context.Background(), nil,
+	screener := newTestScreener(validConfig())
+	screener.ResponseHeader(context.Background(), nil,
 		&fwkrc.Response{Headers: map[string]string{}},
 		&fwkdl.EndpointMetadata{Labels: revLabels("v1")},
 	)
@@ -57,8 +57,8 @@ func TestMetric_HeaderStamped_IncrementsPerSelector(t *testing.T) {
 
 func TestMetric_HeaderStamped_SkipsMissingLabel(t *testing.T) {
 	resetMetrics(t)
-	controller := newTestController(validConfig())
-	controller.ResponseHeader(context.Background(), nil,
+	screener := newTestScreener(validConfig())
+	screener.ResponseHeader(context.Background(), nil,
 		&fwkrc.Response{Headers: map[string]string{}},
 		&fwkdl.EndpointMetadata{Labels: map[string]string{}},
 	)
@@ -73,8 +73,8 @@ func TestMetric_FilterOutcome_Matched(t *testing.T) {
 	resetMetrics(t)
 	config := validConfig()
 	config.RevisionGating = nil
-	controller := newTestController(config)
-	controller.filterStrictSelectors(context.Background(),
+	screener := newTestScreener(config)
+	screener.filterStrictSelectors(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
 	)
@@ -88,8 +88,8 @@ func TestMetric_FilterOutcome_NoMatchStrict(t *testing.T) {
 	resetMetrics(t)
 	config := validConfig()
 	config.RevisionGating = nil
-	controller := newTestController(config)
-	controller.filterStrictSelectors(context.Background(),
+	screener := newTestScreener(config)
+	screener.filterStrictSelectors(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
 	)
@@ -104,8 +104,8 @@ func TestMetric_FilterOutcome_NoMatchPreferFallback(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = nil
 	config.HeaderSelectors[0].Mode = ModePrefer
-	controller := newTestController(config)
-	scorer := &preferScorer{router: controller}
+	screener := newTestScreener(config)
+	scorer := &preferScorer{router: screener}
 	scorer.Score(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
@@ -120,8 +120,8 @@ func TestMetric_FilterOutcome_NoMatchPreferFallback(t *testing.T) {
 
 func TestMetric_GatingDropped_OncePerRevisionPerCall(t *testing.T) {
 	resetMetrics(t)
-	controller := newTestController(validConfig())
-	seedPods(t, controller,
+	screener := newTestScreener(validConfig())
+	seedPods(t, screener,
 		readyPod("p1", "v1", "prefill"),
 		readyPod("p2", "v1", "prefill"),
 		readyPod("p3", "v1", "prefill"),
@@ -136,7 +136,7 @@ func TestMetric_GatingDropped_OncePerRevisionPerCall(t *testing.T) {
 	}
 
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-	controller.Screen(context.Background(), request, pods)
+	screener.Screen(context.Background(), request, pods)
 
 	// Three v1 endpoints hit the gate in one call. The counter should read 1,
 	// not 3.

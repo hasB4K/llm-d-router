@@ -53,7 +53,6 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/config/loader"
 	"github.com/llm-d/llm-d-router/pkg/epp/datalayer"
 	"github.com/llm-d/llm-d-router/pkg/epp/datastore"
-	"github.com/llm-d/llm-d-router/pkg/epp/disaggregation"
 	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol"
 	"github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/contracts"
 	fccontroller "github.com/llm-d/llm-d-router/pkg/epp/flowcontrol/controller"
@@ -102,6 +101,7 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/dataproducer/tokenizer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/requestattributereporter"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/requestheader/agentidentity"
+	disaggrollout "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/screener/disaggrollout"
 	testresponsereceived "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requestcontrol/test/responsereceived"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/anthropic"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/requesthandling/parsers/openai"
@@ -553,12 +553,12 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 
 // registerInTreePlugins registers the factory functions of all known plugins
 func (r *Runner) registerInTreePlugins() {
-	fwkplugin.Register(disaggregation.RouterType, fwkplugin.StabilityAlpha, disaggregation.RouterFactory)
+	fwkplugin.Register(disaggrollout.PluginType, fwkplugin.StabilityAlpha, disaggrollout.Factory)
 	fwkplugin.RegisterWithPluginDependencies(
-		disaggregation.PreferScorerType,
+		disaggrollout.PreferScorerType,
 		fwkplugin.StabilityAlpha,
-		disaggregation.PreferScorerFactory,
-		disaggregation.PreferScorerConfigParser,
+		disaggrollout.PreferScorerFactory,
+		disaggrollout.PreferScorerConfigParser,
 	)
 
 	// bylabel role filters

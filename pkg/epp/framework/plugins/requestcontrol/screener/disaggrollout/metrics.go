@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggregation
+package disaggrollout
 
 import (
 	"sync"
@@ -35,7 +35,7 @@ var (
 		prometheus.CounterOpts{
 			Subsystem: metricsSubsystem,
 			Name:      metricsPrefix + "_header_stamped_total",
-			Help:      "Response headers stamped by the disaggregation controller, by selector name.",
+			Help:      "Response headers stamped by the disaggregation screener, by selector name.",
 		},
 		[]string{"selector"},
 	)

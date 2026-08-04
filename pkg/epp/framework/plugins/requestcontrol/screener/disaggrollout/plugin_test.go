@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package disaggregation
+package disaggrollout
 
 import (
 	"context"
@@ -65,7 +65,7 @@ func readyPod(name, revision, role string) *corev1.Pod {
 	}
 }
 
-func newTestController(config Config) *Controller {
+func newTestScreener(config Config) *Screener {
 	if err := config.Validate(); err != nil {
 		panic(err)
 	}
@@ -73,14 +73,14 @@ func newTestController(config Config) *Controller {
 	if err != nil {
 		panic(err)
 	}
-	return newController("test-router", config, scope)
+	return newScreener("test-screener", config, scope)
 }
 
 func endpoint(name string, endpointLabels map[string]string) fwksched.Endpoint {
 	meta := &fwkdl.EndpointMetadata{
-		NamespacedName: types.NamespacedName{Namespace: testNS, Name: name},
-		PodName:        name,
-		Labels:         endpointLabels,
+		ID:     types.NamespacedName{Namespace: testNS, Name: name},
+		Name:   name,
+		Labels: endpointLabels,
 	}
 	return fwksched.NewEndpoint(meta, &fwkdl.Metrics{}, nil)
 }
@@ -101,9 +101,9 @@ func podEvent(t *testing.T, pod *corev1.Pod, eventType fwkdl.EventType) fwkdl.No
 	return *result
 }
 
-func seedPods(t *testing.T, controller *Controller, pods ...*corev1.Pod) {
+func seedPods(t *testing.T, screener *Screener, pods ...*corev1.Pod) {
 	t.Helper()
-	handler := &podNotificationHandler{controller: controller}
+	handler := &podNotificationHandler{screener: screener}
 	for _, pod := range pods {
 		if err := handler.Extract(context.Background(), podEvent(t, pod, fwkdl.EventAddOrUpdate)); err != nil {
 			t.Fatalf("seed pod %s: %v", pod.Name, err)
@@ -111,36 +111,36 @@ func seedPods(t *testing.T, controller *Controller, pods ...*corev1.Pod) {
 	}
 }
 
-func seedCounts(t *testing.T, controller *Controller, counts map[string]map[string]int) {
+func seedCounts(t *testing.T, screener *Screener, counts map[string]map[string]int) {
 	t.Helper()
 	index := 0
 	for revision, roles := range counts {
 		for role, count := range roles {
 			for range count {
 				index++
-				seedPods(t, controller, readyPod(fmt.Sprintf("%s-%s-%d", revision, role, index), revision, role))
+				seedPods(t, screener, readyPod(fmt.Sprintf("%s-%s-%d", revision, role, index), revision, role))
 			}
 		}
 	}
 }
 
-func screenCandidates(t *testing.T, controller *Controller, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+func screenCandidates(t *testing.T, screener *Screener, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	t.Helper()
-	return controller.Screen(context.Background(), request, endpoints)
+	return screener.Screen(context.Background(), request, endpoints)
 }
 
-func TestRouterFactoryAndPodDependency(t *testing.T) {
+func TestScreenerFactoryAndPodDependency(t *testing.T) {
 	raw, err := json.Marshal(validConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := RouterFactory("revision-router", fwkplugin.StrictDecoder(raw), nil)
+	plugin, err := Factory("rollout-screener", fwkplugin.StrictDecoder(raw), nil)
 	if err != nil {
-		t.Fatalf("RouterFactory: %v", err)
+		t.Fatalf("Factory: %v", err)
 	}
-	router := plugin.(*Controller)
+	router := plugin.(*Screener)
 	var _ fwkrc.Screener = router
-	if router.TypedName() != (fwkplugin.TypedName{Type: RouterType, Name: "revision-router"}) {
+	if router.TypedName() != (fwkplugin.TypedName{Type: PluginType, Name: "rollout-screener"}) {
 		t.Fatalf("unexpected typed name: %v", router.TypedName())
 	}
 	registrar := &captureRegistrar{}
@@ -156,7 +156,7 @@ func TestRouterFactoryAndPodDependency(t *testing.T) {
 	}
 }
 
-func TestRouterFactoryResolvesScopeNamespace(t *testing.T) {
+func TestScreenerFactoryResolvesScopeNamespace(t *testing.T) {
 	tests := []struct {
 		name        string
 		configured  string
@@ -177,17 +177,17 @@ func TestRouterFactoryResolvesScopeNamespace(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			plugin, err := RouterFactory("revision-router", fwkplugin.StrictDecoder(raw), nil)
+			plugin, err := Factory("rollout-screener", fwkplugin.StrictDecoder(raw), nil)
 			if test.wantError {
 				if err == nil {
-					t.Fatal("RouterFactory accepted an unresolved scope namespace")
+					t.Fatal("Factory accepted an unresolved scope namespace")
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("RouterFactory: %v", err)
+				t.Fatalf("Factory: %v", err)
 			}
-			if got := plugin.(*Controller).config.Scope.Namespace; got != test.want {
+			if got := plugin.(*Screener).config.Scope.Namespace; got != test.want {
 				t.Fatalf("want namespace %q, got %q", test.want, got)
 			}
 		})
@@ -204,8 +204,8 @@ func (r *captureRegistrar) Register(registration fwkdl.PendingRegistration) erro
 }
 
 func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
-	controller := newTestController(validConfig())
-	handler := &podNotificationHandler{controller: controller}
+	screener := newTestScreener(validConfig())
+	handler := &podNotificationHandler{screener: screener}
 	inScope := readyPod("p1", "v1", "prefill")
 	outOfScope := readyPod("p2", "v2", "decode")
 	outOfScope.Labels["disaggregatedset.x-k8s.io/name"] = "other"
@@ -218,7 +218,7 @@ func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	counts := controller.distributionSnapshot().roleCounts
+	counts := screener.distributionSnapshot().roleCounts
 	if counts["v1"]["prefill"] != 1 || len(counts["v1"]) != 1 || len(counts) != 1 {
 		t.Fatalf("unexpected counts: %#v", counts)
 	}
@@ -226,15 +226,15 @@ func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
 	if err := handler.Extract(context.Background(), podEvent(t, inScope, fwkdl.EventDelete)); err != nil {
 		t.Fatal(err)
 	}
-	if got := controller.distributionSnapshot().roleCounts; len(got) != 0 {
+	if got := screener.distributionSnapshot().roleCounts; len(got) != 0 {
 		t.Fatalf("delete did not remove Pod: %#v", got)
 	}
 }
 
 func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
-	controller := newTestController(validConfig())
+	screener := newTestScreener(validConfig())
 	v1Decode := readyPod("v1-decode-1", "v1", "decode")
-	seedPods(t, controller,
+	seedPods(t, screener,
 		readyPod("v1-prefill-1", "v1", "prefill"),
 		readyPod("v1-prefill-2", "v1", "prefill"),
 		v1Decode,
@@ -243,18 +243,18 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 		readyPod("v2-decode-1", "v2", "decode"),
 	)
 
-	distribution := controller.distributionSnapshot()
+	distribution := screener.distributionSnapshot()
 	if math.Abs(distribution.shares["v1"]-2.0/3.0) > 1e-9 || math.Abs(distribution.shares["v2"]-1.0/3.0) > 1e-9 {
 		t.Fatalf("unexpected initial shares: %#v", distribution.shares)
 	}
 
-	handler := &podNotificationHandler{controller: controller}
+	handler := &podNotificationHandler{screener: screener}
 	movedToV2 := v1Decode.DeepCopy()
 	movedToV2.Labels[testRevLabel] = "v2"
 	if err := handler.Extract(context.Background(), podEvent(t, movedToV2, fwkdl.EventAddOrUpdate)); err != nil {
 		t.Fatal(err)
 	}
-	distribution = controller.distributionSnapshot()
+	distribution = screener.distributionSnapshot()
 	if math.Abs(distribution.shares["v1"]-1.0/2.0) > 1e-9 || math.Abs(distribution.shares["v2"]-1.0/2.0) > 1e-9 {
 		t.Fatalf("shares retained stale Pod labels: %#v", distribution.shares)
 	}
@@ -264,7 +264,7 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 	if err := handler.Extract(context.Background(), podEvent(t, notReady, fwkdl.EventAddOrUpdate)); err != nil {
 		t.Fatal(err)
 	}
-	distribution = controller.distributionSnapshot()
+	distribution = screener.distributionSnapshot()
 	if math.Abs(distribution.shares["v1"]-3.0/5.0) > 1e-9 || math.Abs(distribution.shares["v2"]-2.0/5.0) > 1e-9 {
 		t.Fatalf("shares were not refreshed: %#v", distribution.shares)
 	}
@@ -357,10 +357,10 @@ func TestRevisionModesCacheExpectedShares(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			config := validConfig()
 			config.RevisionGating.Mode = test.mode
-			controller := newTestController(config)
-			seedCounts(t, controller, test.counts)
+			screener := newTestScreener(config)
+			seedCounts(t, screener, test.counts)
 
-			shares := controller.distributionSnapshot().shares
+			shares := screener.distributionSnapshot().shares
 			if math.Abs(shares["v2"]-test.wantV2) > 1e-9 || math.Abs(shares["v1"]-(1-test.wantV2)) > 1e-9 {
 				t.Fatalf("unexpected shares: %#v", shares)
 			}
@@ -368,61 +368,61 @@ func TestRevisionModesCacheExpectedShares(t *testing.T) {
 	}
 }
 
-func TestRouterWeightedGatingRunsBeforeStrictFilter(t *testing.T) {
-	controller := newTestController(validConfig())
-	seedCounts(t, controller, map[string]map[string]int{
+func TestScreenerWeightedGatingRunsBeforeStrictFilter(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{
 		"v1": {"prefill": 3, "decode": 3},
 		"v2": {"prefill": 1, "decode": 1},
 	})
-	controller.rand01 = func() float64 { return 0 }
+	screener.rand01 = func() float64 { return 0 }
 	candidates := []fwksched.Endpoint{
 		endpoint("v1-p", revLabels("v1")),
 		endpoint("v2-p", revLabels("v2")),
 	}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-	got := screenCandidates(t, controller, request, candidates)
+	got := screenCandidates(t, screener, request, candidates)
 	if len(got) != 1 || got[0].GetMetadata().Name != "v1-p" {
 		t.Fatalf("want selected v1 endpoint, got %v", got)
 	}
 }
 
-func TestRouterPinnedUncoveredRevisionFailsClosed(t *testing.T) {
-	controller := newTestController(validConfig())
-	seedCounts(t, controller, map[string]map[string]int{
+func TestScreenerPinnedUncoveredRevisionFailsClosed(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{
 		"v1": {"prefill": 3},
 		"v2": {"prefill": 1, "decode": 1},
 	})
-	controller.rand01 = func() float64 { panic("pinned requests must not choose a revision") }
+	screener.rand01 = func() float64 { panic("pinned requests must not choose a revision") }
 	candidates := []fwksched.Endpoint{
 		endpoint("v1-p", revLabels("v1")),
 		endpoint("v2-p", revLabels("v2")),
 	}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}}
-	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
 		t.Fatalf("uncovered pinned revision must fail closed, got %v", got)
 	}
 }
 
-func TestRouterSingleRevisionStillChecksCrossRoleCoverage(t *testing.T) {
-	controller := newTestController(validConfig())
-	seedCounts(t, controller, map[string]map[string]int{"v1": {"prefill": 2}})
+func TestScreenerSingleRevisionStillChecksCrossRoleCoverage(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 2}})
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
 	candidates := []fwksched.Endpoint{endpoint("v1-p", revLabels("v1"))}
-	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
 		t.Fatalf("single uncovered revision must be gated, got %v", got)
 	}
 }
 
-func TestRouterFailsClosedUntilPodNotificationsArrive(t *testing.T) {
-	controller := newTestController(validConfig())
+func TestScreenerFailsClosedUntilPodNotificationsArrive(t *testing.T) {
+	screener := newTestScreener(validConfig())
 	request := &fwksched.InferenceRequest{Headers: map[string]string{}}
 	candidates := []fwksched.Endpoint{endpoint("v1-p", revLabels("v1"))}
-	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
 		t.Fatalf("empty notification state must fail closed, got %v", got)
 	}
 }
 
-func TestRouterWeightedDistribution(t *testing.T) {
+func TestScreenerWeightedDistribution(t *testing.T) {
 	tests := []struct {
 		name      string
 		mode      GatingMode
@@ -441,13 +441,13 @@ func TestRouterWeightedDistribution(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			config := validConfig()
 			config.RevisionGating.Mode = test.mode
-			controller := newTestController(config)
-			seedCounts(t, controller, test.counts)
+			screener := newTestScreener(config)
+			seedCounts(t, screener, test.counts)
 			candidates := candidatePool(test.counts["v1"]["prefill"], test.counts["v2"]["prefill"])
 			v2 := 0
 			for range iterations {
 				request := &fwksched.InferenceRequest{Headers: map[string]string{}}
-				got := screenCandidates(t, controller, request, candidates)
+				got := screenCandidates(t, screener, request, candidates)
 				if len(got) == 0 {
 					t.Fatal("empty survivor set")
 				}
@@ -477,15 +477,15 @@ func candidatePool(v1, v2 int) []fwksched.Endpoint {
 func TestStrictSelectors(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = nil
-	controller := newTestController(config)
+	screener := newTestScreener(config)
 	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
-	got := screenCandidates(t, controller, request, candidates)
+	got := screenCandidates(t, screener, request, candidates)
 	if len(got) != 1 || got[0].GetMetadata().Name != "v2" {
 		t.Fatalf("strict filter mismatch: %v", got)
 	}
 	request.Headers["x-disagg-revision"] = "missing"
-	if got := screenCandidates(t, controller, request, candidates); len(got) != 0 {
+	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
 		t.Fatalf("strict no-match must be empty: %v", got)
 	}
 }
@@ -494,7 +494,7 @@ func TestPreferScorerScoresMatchesWithoutRemovingCandidates(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = nil
 	config.HeaderSelectors[0].Mode = ModePrefer
-	router := newTestController(config)
+	router := newTestScreener(config)
 	scorer := &preferScorer{typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: "prefer"}, router: router}
 	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
@@ -519,7 +519,7 @@ func TestPreferScorerAveragesMultipleSelectors(t *testing.T) {
 	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
 		Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "llm-d.ai/slice", Mode: ModePrefer,
 	})
-	router := newTestController(config)
+	router := newTestScreener(config)
 	scorer := &preferScorer{typedName: fwkplugin.TypedName{Type: PreferScorerType, Name: "prefer"}, router: router}
 	candidates := []fwksched.Endpoint{
 		endpoint("both", map[string]string{testRevLabel: "v2", "llm-d.ai/slice": "s2"}),
@@ -541,7 +541,7 @@ func TestPreferScorerAveragesMultipleSelectors(t *testing.T) {
 func TestPreferScorerFactoryLinksRouter(t *testing.T) {
 	config := validConfig()
 	config.HeaderSelectors[0].Mode = ModePrefer
-	router := newTestController(config)
+	router := newTestScreener(config)
 	handle := testutils.NewTestHandle(context.Background())
 	handle.AddPlugin("test-router", router)
 	raw := json.RawMessage(`{"routerRef":"test-router"}`)
@@ -556,9 +556,9 @@ func TestPreferScorerFactoryLinksRouter(t *testing.T) {
 }
 
 func TestResponseHeaderStampsSelectors(t *testing.T) {
-	controller := newTestController(validConfig())
+	screener := newTestScreener(validConfig())
 	response := &fwkrc.Response{Headers: map[string]string{}}
-	controller.ResponseHeader(context.Background(), nil, response, &fwkdl.EndpointMetadata{Labels: revLabels("v1")})
+	screener.ResponseHeader(context.Background(), nil, response, &fwkdl.EndpointMetadata{Labels: revLabels("v1")})
 	if response.Headers["x-disagg-revision"] != "v1" {
 		t.Fatalf("revision header not stamped: %#v", response.Headers)
 	}
