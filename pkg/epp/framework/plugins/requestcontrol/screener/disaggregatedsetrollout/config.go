@@ -141,9 +141,10 @@ const (
 	// For A={prefill:2,decode:9} and B={prefill:1,decode:1}, the weights
 	// are 11 and 2, producing shares of 11/13 and 2/13.
 	GatingModeSum GatingMode = "sum"
-	// GatingModeMaxRole applies the same coverage check as GatingModeSum, then
-	// uses the largest Ready pod count among the required roles as each covered
-	// revision's weight.
+	// GatingModeMaxRole applies the same coverage check as GatingModeSum, sums
+	// each required role across every covered revision, and selects the role
+	// with the largest total. Every revision is then weighted by its Ready pod
+	// count for that same role. RequireRoles order resolves equal totals.
 	GatingModeMaxRole GatingMode = "max-role"
 	// GatingModeDisabled turns off revision gating while preserving any
 	// configured header selectors.

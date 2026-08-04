@@ -8,10 +8,6 @@ request during a `DisaggregatedSet` rollout. It runs before every scheduling
 profile, so the compatibility constraint cannot be undone by a later filter,
 scorer, or picker.
 
-Most endpoint-selection plugins should be scheduling filters. Use a Screener
-only for a constraint, such as revision compatibility, that must apply to every
-scheduling profile.
-
 ## Why Revision Screening Is Needed
 
 A `DisaggregatedSet` creates a new revision when any role changes. Every Pod in
@@ -19,11 +15,16 @@ that revision has the same `disaggregatedset.x-k8s.io/revision` label. The label
 therefore identifies the prefill and decode Pods that were created from the
 same role templates and should be treated as a compatibility boundary.
 
-Pairing Pods from different revisions can make incompatible KV-cache formats,
-model code, or runtime versions communicate. Depending on the change, that can
-cause corrupted output, process crashes, or failed requests. See
-[llm-d-router issue #2143](https://github.com/llm-d/llm-d-router/issues/2143)
-for the motivating failure modes.
+Pairing Pods from different revisions can be troublesome:
+
+- The revisions can use incompatible KV-cache formats.
+- Switching libraries or inference-engine versions can change the KV-cache
+  transfer protocol without backward compatibility.
+- An unreliable old revision can produce corrupted KV-cache state that should
+  not reach the new revision.
+- A rollout can move Pods to a different driver through a `nodeSelector` or
+  toleration. Old and new drivers can be incompatible with the KV-cache
+  transfer mechanism.
 
 Rolling out all roles at exactly the same percentage is not always possible.
 Replica counts are integers, and each role is constrained by its own surge and
@@ -44,22 +45,51 @@ decode side while leaving A's decode capacity unused.
 The
 [DisaggregatedSet rollout KEP](https://github.com/kubernetes-sigs/lws/tree/main/keps/766-DisaggregatedSet)
 explains how the controller keeps role progress as close as integer replica
-counts permit. Its rollout planner can show the individual steps:
+counts permit. Run its rollout planner from the root of a
+[`kubernetes-sigs/lws`](https://github.com/kubernetes-sigs/lws) checkout. Using
+`maxUnavailable: 2` for both roles keeps this example short:
 
 ```bash
 go run ./hack/plan-steps \
   --source '{"prefill": 2, "decode": 10}' \
   --target '{"prefill": 2, "decode": 10}' \
   --surge '{"prefill": 0, "decode": 0}' \
-  --unavailable '{"prefill": 1, "decode": 1}'
+  --unavailable '{"prefill": 2, "decode": 2}'
 ```
+
+```text
+Roles: [decode prefill]
+Source: decode=10, prefill=2
+Target: decode=10, prefill=2
+Config: decode(surge=0, unavailable=2), prefill(surge=0, unavailable=2)
+
+Step  Old decode  Old prefill  New decode  New prefill  Total  Action
+----  ----------  -----------  ----------  -----------  -----  -----------------------------
+0     10          2            0           0            12     initial
+1     8           2            0           0            10     old decode -2
+2     8           2            2           0            12     new decode +2
+3     6           1            2           0            9      old decode -2, old prefill -1
+4     6           1            4           1            12     new decode +2, new prefill +1
+5     4           1            4           1            10     old decode -2
+6     4           1            6           1            12     new decode +2
+7     2           1            6           1            10     old decode -2
+8     2           1            8           1            12     new decode +2
+9     0           0            8           1            9      old decode -2, old prefill -1
+10    0           0            10          2            12     new decode +2, new prefill +1
+```
+
+At steps 2 and 3, the new revision has no prefill Pod, so it cannot serve a
+request. Once both revisions are covered, decode is the globally largest role.
+`max-role` therefore produces old/new shares of 60/40 at step 4, 40/60 at step
+6, and 20/80 at step 8.
 
 ## Request Lifecycle
 
 For every Pod notification, the plugin caches the Ready Pod count by revision
 and role. For a request without a strict revision header, it then:
 
-1. Removes every revision that has no Ready Pod for any required role.
+1. Removes every revision that has no Ready Pod for any required role, because
+   a revision missing one role cannot serve the request.
 2. Computes a weight for each remaining revision.
 3. Randomly chooses one revision using those weights.
 4. Exposes only that revision's endpoints to all scheduling profiles.
@@ -107,20 +137,28 @@ candidate set, so they cannot independently select different revisions.
 
 ### `max-role`
 
-The weight of a revision is the largest Ready Pod count among the required
-roles:
+The plugin first totals each required role across all covered revisions and
+selects the globally largest role. It then weights every revision using that
+same role:
 
 ```text
-weight(revision) = max(ready prefill Pods, ready decode Pods)
+dominantRole = argmax(role) sum(Ready Pods for role across covered revisions)
+weight(revision) = Ready Pods for dominantRole in revision
 ```
 
 For the 2P:10D example:
 
 ```text
-A: max(2, 9) = 9
-B: max(1, 1) = 1
+global totals: prefill = 3, decode = 10
+dominant role: decode
+A: 9 decode Pods
+B: 1 decode Pod
 traffic: A 90 percent, B 10 percent
 ```
+
+The dominant role is selected once for the whole distribution. It cannot be
+prefill for one revision and decode for another. If role totals are equal, the
+first role in `revisionGating.requireRoles.values` wins the tie.
 
 This mode is useful for a stable, intentionally asymmetric role ratio such as
 2P:10D or 10P:2D. It assumes that the more numerous role is a reasonable proxy

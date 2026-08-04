@@ -247,14 +247,28 @@ func incrementRoleCount(counts map[string]map[string]int, pod podInfo) {
 }
 
 func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles []string, mode GatingMode) revisionDistribution {
-	weights := make(map[string]int, len(roleCounts))
-	total := 0
+	covered := make(map[string]map[string]int, len(roleCounts))
 	for revision, perRole := range roleCounts {
-		weight := revisionWeight(perRole, requiredRoles, mode == GatingModeMaxRole)
-		if weight == 0 {
-			continue
+		if _, ok := revisionSumWeight(perRole, requiredRoles); ok {
+			covered[revision] = perRole
 		}
-		weights[revision] = weight
+	}
+
+	weights := make(map[string]int, len(roleCounts))
+	if mode == GatingModeMaxRole {
+		role := dominantRole(covered, requiredRoles)
+		for revision, perRole := range covered {
+			weights[revision] = perRole[role]
+		}
+	} else {
+		for revision, perRole := range covered {
+			weight, _ := revisionSumWeight(perRole, requiredRoles)
+			weights[revision] = weight
+		}
+	}
+
+	total := 0
+	for _, weight := range weights {
 		total += weight
 	}
 
@@ -265,6 +279,23 @@ func newRevisionDistribution(roleCounts map[string]map[string]int, requiredRoles
 		}
 	}
 	return revisionDistribution{roleCounts: roleCounts, shares: shares}
+}
+
+func dominantRole(covered map[string]map[string]int, requiredRoles []string) string {
+	dominant := ""
+	dominantCount := -1
+	for _, role := range requiredRoles {
+		total := 0
+		for _, perRole := range covered {
+			total += perRole[role]
+		}
+		// RequiredRoles order resolves ties deterministically.
+		if total > dominantCount {
+			dominant = role
+			dominantCount = total
+		}
+	}
+	return dominant
 }
 
 func (c *Screener) distributionSnapshot() revisionDistribution {

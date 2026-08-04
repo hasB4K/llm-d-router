@@ -269,24 +269,48 @@ func TestPodNotificationsRefreshCachedRevisionShares(t *testing.T) {
 	}
 }
 
-func TestRevisionWeightModesAndCoverage(t *testing.T) {
+func TestRevisionSumWeightAndCoverage(t *testing.T) {
 	tests := []struct {
-		name       string
-		useMaxRole bool
-		counts     map[string]int
-		want       int
+		name    string
+		counts  map[string]int
+		want    int
+		covered bool
 	}{
-		{name: "sum", counts: map[string]int{"prefill": 2, "decode": 8}, want: 10},
-		{name: "max role", useMaxRole: true, counts: map[string]int{"prefill": 2, "decode": 8}, want: 8},
-		{name: "sum requires every role", counts: map[string]int{"decode": 8}, want: 0},
-		{name: "max role requires every role", useMaxRole: true, counts: map[string]int{"decode": 8}, want: 0},
+		{name: "covered", counts: map[string]int{"prefill": 2, "decode": 8}, want: 10, covered: true},
+		{name: "missing role", counts: map[string]int{"decode": 8}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := revisionWeight(test.counts, []string{"prefill", "decode"}, test.useMaxRole); got != test.want {
-				t.Fatalf("revisionWeight() = %d, want %d", got, test.want)
+			got, covered := revisionSumWeight(test.counts, []string{"prefill", "decode"})
+			if got != test.want || covered != test.covered {
+				t.Fatalf("revisionSumWeight() = (%d, %t), want (%d, %t)", got, covered, test.want, test.covered)
 			}
 		})
+	}
+}
+
+func TestDominantRoleUsesCountsAcrossCoveredRevisions(t *testing.T) {
+	const (
+		prefillRole = "prefill"
+		decodeRole  = "decode"
+	)
+	covered := map[string]map[string]int{
+		"v1": {prefillRole: 8, decodeRole: 1},
+		"v2": {prefillRole: 2, decodeRole: 4},
+	}
+	if got := dominantRole(covered, []string{prefillRole, decodeRole}); got != prefillRole {
+		t.Fatalf("dominantRole() = %q, want prefill", got)
+	}
+	if got := dominantRole(covered, []string{decodeRole, prefillRole}); got != prefillRole {
+		t.Fatalf("dominantRole() = %q, want prefill", got)
+	}
+
+	tied := map[string]map[string]int{
+		"v1": {prefillRole: 8, decodeRole: 2},
+		"v2": {prefillRole: 2, decodeRole: 8},
+	}
+	if got := dominantRole(tied, []string{prefillRole, decodeRole}); got != prefillRole {
+		t.Fatalf("tied dominantRole() = %q, want first required role prefill", got)
 	}
 }
 
@@ -348,6 +372,25 @@ func TestRevisionModesCacheExpectedShares(t *testing.T) {
 			counts: map[string]map[string]int{
 				"v1": {"prefill": 8, "decode": 2},
 				"v2": {"prefill": 2, "decode": 1},
+			},
+			wantV2: 2.0 / 10.0,
+		},
+		{
+			name: "max role is shared across revisions",
+			mode: GatingModeMaxRole,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 8, "decode": 1},
+				"v2": {"prefill": 2, "decode": 4},
+			},
+			wantV2: 2.0 / 10.0,
+		},
+		{
+			name: "max role ignores incomplete revisions",
+			mode: GatingModeMaxRole,
+			counts: map[string]map[string]int{
+				"v1": {"prefill": 2, "decode": 8},
+				"v2": {"prefill": 1, "decode": 2},
+				"v3": {"prefill": 100},
 			},
 			wantV2: 2.0 / 10.0,
 		},

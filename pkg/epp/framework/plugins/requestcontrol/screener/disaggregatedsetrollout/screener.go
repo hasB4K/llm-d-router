@@ -139,20 +139,16 @@ func uniqueRevisions(endpoints []fwksched.Endpoint, revisionLabelKey string) map
 	return seen
 }
 
-func revisionWeight(perRole map[string]int, required []string, useMaxRole bool) int {
+func revisionSumWeight(perRole map[string]int, required []string) (int, bool) {
 	weight := 0
 	for _, role := range required {
 		count := perRole[role]
 		if count == 0 {
-			return 0
+			return 0, false
 		}
-		if useMaxRole {
-			weight = max(weight, count)
-		} else {
-			weight += count
-		}
+		weight += count
 	}
-	return weight
+	return weight, true
 }
 
 func pickWeightedRevision(shares map[string]float64, draw float64) string {
