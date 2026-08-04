@@ -416,7 +416,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 		targetModelName         string                   // Expected model name after target model resolution
 		admitRequestDenialError error                    // Expected denial error from admission plugin
 		dataProducerPlugin      *mockDataProducerPlugin
-		preSchedulingFilter     *mockPreSchedulingCandidateFilter
+		screener                *mockScreener
 		preRequestPlugin        *mockPreRequestPlugin
 		requestHeaderPlugin     *mockRequestHeaderPlugin
 		wantMutatedBody         map[string]any
@@ -894,7 +894,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 			wantErrCode: errcommon.BadRequest,
 		},
 		{
-			name: "pre-scheduling candidate filter eliminates all candidates",
+			name: "screener eliminates all candidates",
 			reqBodyMap: map[string]any{
 				"model":  model,
 				"prompt": "critical prompt",
@@ -902,7 +902,7 @@ func TestDirector_HandleRequest(t *testing.T) {
 			mockAdmissionController: &mockAdmissionController{admitErr: nil},
 			initialTargetModelName:  model,
 			inferenceObjectiveName:  objectiveName,
-			preSchedulingFilter: &mockPreSchedulingCandidateFilter{name: "eliminate-all", filter: func([]fwksched.Endpoint) []fwksched.Endpoint {
+			screener: &mockScreener{name: "eliminate-all", screen: func([]fwksched.Endpoint) []fwksched.Endpoint {
 				return nil
 			}},
 			wantErrCode: errcommon.ServiceUnavailable,
@@ -983,8 +983,8 @@ func TestDirector_HandleRequest(t *testing.T) {
 				if test.dataProducerPlugin != nil {
 					config = config.WithDataProducerPlugins(test.dataProducerPlugin)
 				}
-				if test.preSchedulingFilter != nil {
-					config = config.WithPreSchedulingCandidateFilters(test.preSchedulingFilter)
+				if test.screener != nil {
+					config = config.WithScreeners(test.screener)
 				}
 				if test.preRequestPlugin != nil {
 					config = config.WithPreRequestPlugins(test.preRequestPlugin)

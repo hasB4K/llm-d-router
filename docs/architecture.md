@@ -66,9 +66,10 @@ Request control runs once per request before any scheduling profiles:
 
 1. Request headers are processed and flow-control admission completes
 2. Endpoint candidates are located
-3. Global `PreSchedulingCandidateFilter` plugins receive independent copies of the same located endpoint set
-   - Their returned subsets are intersected
-   - Use this stage for mandatory routing constraints that every profile must observe
+3. Global `Screener` plugins perform preliminary filtering of located endpoints
+   - Each screener receives an independent copy of the same endpoint set, and their returned subsets are intersected
+   - Most endpoint-selection plugins should implement a scheduling `Filter`, not a `Screener`
+   - Use a `Screener` only for mandatory constraints that must apply to every scheduling profile
 4. Data producers prepare per-request data using the filtered candidate set
 5. Admission plugins may reject the request
 6. The scheduler runs the configured scheduling profiles using the filtered candidate set

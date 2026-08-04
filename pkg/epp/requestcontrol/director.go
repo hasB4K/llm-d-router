@@ -306,11 +306,11 @@ func (d *Director) HandleRequest(ctx context.Context, reqCtx *handlers.RequestCo
 	}
 
 	snapshotOfCandidatePods := d.toSchedulerEndpoints(endpointCandidates)
-	snapshotOfCandidatePods = d.runPreSchedulingCandidateFilters(ctx, reqCtx.SchedulingRequest, snapshotOfCandidatePods)
+	snapshotOfCandidatePods = d.runScreeners(ctx, reqCtx.SchedulingRequest, snapshotOfCandidatePods)
 	if len(snapshotOfCandidatePods) == 0 {
 		return reqCtx, errcommon.Error{
 			Code: errcommon.ServiceUnavailable,
-			Msg:  "pre-scheduling candidate filters eliminated all endpoint candidates",
+			Msg:  "screeners eliminated all endpoint candidates",
 		}
 	}
 	// Prepare per request data by running DataProducer plugins.
@@ -651,15 +651,15 @@ func (d *Director) runDataProducerPlugins(ctx context.Context,
 	return nil
 }
 
-func (d *Director) runPreSchedulingCandidateFilters(ctx context.Context,
+func (d *Director) runScreeners(ctx context.Context,
 	request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 	loggerDebug := log.FromContext(ctx).V(logutil.DEBUG)
 	filteredEndpoints := endpoints
-	for _, plugin := range d.requestControlPlugins.preSchedulingCandidateFilters {
-		loggerDebug.Info("Running PreSchedulingCandidateFilter plugin", "plugin", plugin.TypedName())
+	for _, plugin := range d.requestControlPlugins.screeners {
+		loggerDebug.Info("Running Screener plugin", "plugin", plugin.TypedName())
 		before := time.Now()
-		pluginEndpoints := plugin.FilterCandidates(ctx, request, slices.Clone(endpoints))
-		metrics.RecordPluginProcessingLatency(fwkrc.PreSchedulingCandidateFilterExtensionPoint,
+		pluginEndpoints := plugin.Screen(ctx, request, slices.Clone(endpoints))
+		metrics.RecordPluginProcessingLatency(fwkrc.ScreenerExtensionPoint,
 			plugin.TypedName().Type, plugin.TypedName().Name, time.Since(before))
 		allowed := make(map[fwksched.Endpoint]struct{}, len(pluginEndpoints))
 		for _, endpoint := range pluginEndpoints {
@@ -672,7 +672,7 @@ func (d *Director) runPreSchedulingCandidateFilters(ctx context.Context,
 			}
 		}
 		filteredEndpoints = intersection
-		loggerDebug.Info("Completed running PreSchedulingCandidateFilter plugin successfully",
+		loggerDebug.Info("Completed running Screener plugin successfully",
 			"plugin", plugin.TypedName(), "remainingEndpoints", len(filteredEndpoints))
 	}
 	return filteredEndpoints

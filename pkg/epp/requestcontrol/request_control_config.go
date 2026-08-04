@@ -24,25 +24,25 @@ import (
 // NewConfig creates a new Config object and returns its pointer.
 func NewConfig() *Config {
 	return &Config{
-		requestHeaderPlugins:          []fwkrc.RequestHeaderProcessor{},
-		preSchedulingCandidateFilters: []fwkrc.PreSchedulingCandidateFilter{},
-		admissionPlugins:              []fwkrc.Admitter{},
-		dataProducerPlugins:           []fwkrc.DataProducer{},
-		preRequestPlugins:             []fwkrc.PreRequest{},
-		responseReceivedPlugins:       []fwkrc.ResponseHeaderProcessor{},
-		responseStreamingPlugins:      []fwkrc.ResponseBodyProcessor{},
+		requestHeaderPlugins:     []fwkrc.RequestHeaderProcessor{},
+		screeners:                []fwkrc.Screener{},
+		admissionPlugins:         []fwkrc.Admitter{},
+		dataProducerPlugins:      []fwkrc.DataProducer{},
+		preRequestPlugins:        []fwkrc.PreRequest{},
+		responseReceivedPlugins:  []fwkrc.ResponseHeaderProcessor{},
+		responseStreamingPlugins: []fwkrc.ResponseBodyProcessor{},
 	}
 }
 
 // Config provides a configuration for the requestcontrol plugins.
 type Config struct {
-	requestHeaderPlugins          []fwkrc.RequestHeaderProcessor
-	preSchedulingCandidateFilters []fwkrc.PreSchedulingCandidateFilter
-	admissionPlugins              []fwkrc.Admitter
-	dataProducerPlugins           []fwkrc.DataProducer
-	preRequestPlugins             []fwkrc.PreRequest
-	responseReceivedPlugins       []fwkrc.ResponseHeaderProcessor
-	responseStreamingPlugins      []fwkrc.ResponseBodyProcessor
+	requestHeaderPlugins     []fwkrc.RequestHeaderProcessor
+	screeners                []fwkrc.Screener
+	admissionPlugins         []fwkrc.Admitter
+	dataProducerPlugins      []fwkrc.DataProducer
+	preRequestPlugins        []fwkrc.PreRequest
+	responseReceivedPlugins  []fwkrc.ResponseHeaderProcessor
+	responseStreamingPlugins []fwkrc.ResponseBodyProcessor
 }
 
 // WithRequestHeaderPlugins sets the given plugins as the RequestHeaderProcessor plugins.
@@ -51,10 +51,10 @@ func (c *Config) WithRequestHeaderPlugins(plugins ...fwkrc.RequestHeaderProcesso
 	return c
 }
 
-// WithPreSchedulingCandidateFilters sets the filters that narrow candidates
-// before request data production and scheduling.
-func (c *Config) WithPreSchedulingCandidateFilters(filters ...fwkrc.PreSchedulingCandidateFilter) *Config {
-	c.preSchedulingCandidateFilters = filters
+// WithScreeners sets the screeners that narrow candidates before request data
+// production and scheduling.
+func (c *Config) WithScreeners(screeners ...fwkrc.Screener) *Config {
+	c.screeners = screeners
 	return c
 }
 
@@ -99,8 +99,8 @@ func (c *Config) AddPlugins(pluginObjects ...plugin.Plugin) {
 		if requestHeaderProcessor, ok := plugin.(fwkrc.RequestHeaderProcessor); ok {
 			c.requestHeaderPlugins = append(c.requestHeaderPlugins, requestHeaderProcessor)
 		}
-		if candidateFilter, ok := plugin.(fwkrc.PreSchedulingCandidateFilter); ok {
-			c.preSchedulingCandidateFilters = append(c.preSchedulingCandidateFilters, candidateFilter)
+		if screener, ok := plugin.(fwkrc.Screener); ok {
+			c.screeners = append(c.screeners, screener)
 		}
 		if preRequestPlugin, ok := plugin.(fwkrc.PreRequest); ok {
 			c.preRequestPlugins = append(c.preRequestPlugins, preRequestPlugin)

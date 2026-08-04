@@ -30,55 +30,55 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-type mockPreSchedulingCandidateFilter struct {
+type mockScreener struct {
 	name   string
-	filter func([]fwksched.Endpoint) []fwksched.Endpoint
+	screen func([]fwksched.Endpoint) []fwksched.Endpoint
 }
 
-func (f *mockPreSchedulingCandidateFilter) TypedName() fwkplugin.TypedName {
-	return fwkplugin.TypedName{Type: "mock-pre-scheduling-candidate-filter", Name: f.name}
+func (f *mockScreener) TypedName() fwkplugin.TypedName {
+	return fwkplugin.TypedName{Type: "mock-screener", Name: f.name}
 }
 
-func (f *mockPreSchedulingCandidateFilter) FilterCandidates(
+func (f *mockScreener) Screen(
 	_ context.Context,
 	_ *fwksched.InferenceRequest,
 	endpoints []fwksched.Endpoint,
 ) []fwksched.Endpoint {
-	return f.filter(endpoints)
+	return f.screen(endpoints)
 }
 
-func TestConfigAddPluginsCollectsPreSchedulingCandidateFilters(t *testing.T) {
-	filter := &mockPreSchedulingCandidateFilter{name: "candidate-filter", filter: func(endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+func TestConfigAddPluginsCollectsScreeners(t *testing.T) {
+	screener := &mockScreener{name: "candidate-screener", screen: func(endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 		return endpoints
 	}}
 	config := NewConfig()
 
-	config.AddPlugins(filter)
+	config.AddPlugins(screener)
 
-	require.Len(t, config.preSchedulingCandidateFilters, 1)
-	assert.Same(t, filter, config.preSchedulingCandidateFilters[0])
-	var _ fwkrc.PreSchedulingCandidateFilter = filter
+	require.Len(t, config.screeners, 1)
+	assert.Same(t, screener, config.screeners[0])
+	var _ fwkrc.Screener = screener
 }
 
-func TestRunPreSchedulingCandidateFiltersIntersectsIndependentSubsets(t *testing.T) {
+func TestRunScreenersIntersectsIndependentSubsets(t *testing.T) {
 	endpoints := []fwksched.Endpoint{
 		candidateEndpoint("a"),
 		candidateEndpoint("b"),
 		candidateEndpoint("c"),
 	}
 	secondInput := []fwksched.Endpoint(nil)
-	config := NewConfig().WithPreSchedulingCandidateFilters(
-		&mockPreSchedulingCandidateFilter{name: "drop-a", filter: func(endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+	config := NewConfig().WithScreeners(
+		&mockScreener{name: "drop-a", screen: func(endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 			return endpoints[1:]
 		}},
-		&mockPreSchedulingCandidateFilter{name: "keep-c", filter: func(endpoints []fwksched.Endpoint) []fwksched.Endpoint {
+		&mockScreener{name: "keep-c", screen: func(endpoints []fwksched.Endpoint) []fwksched.Endpoint {
 			secondInput = append(secondInput, endpoints...)
 			return endpoints[2:]
 		}},
 	)
 	director := &Director{requestControlPlugins: *config}
 
-	result := director.runPreSchedulingCandidateFilters(context.Background(), &fwksched.InferenceRequest{}, endpoints)
+	result := director.runScreeners(context.Background(), &fwksched.InferenceRequest{}, endpoints)
 
 	require.Len(t, secondInput, 3)
 	assert.Equal(t, "a", secondInput[0].GetMetadata().Name)
@@ -86,14 +86,14 @@ func TestRunPreSchedulingCandidateFiltersIntersectsIndependentSubsets(t *testing
 	assert.Equal(t, "c", result[0].GetMetadata().Name)
 }
 
-func TestRunPreSchedulingCandidateFiltersAllObserveOriginalSetAfterEmptyResult(t *testing.T) {
+func TestRunScreenersAllObserveOriginalSetAfterEmptyResult(t *testing.T) {
 	endpoints := []fwksched.Endpoint{candidateEndpoint("a"), candidateEndpoint("b")}
 	secondCalled := false
-	config := NewConfig().WithPreSchedulingCandidateFilters(
-		&mockPreSchedulingCandidateFilter{name: "empty", filter: func([]fwksched.Endpoint) []fwksched.Endpoint {
+	config := NewConfig().WithScreeners(
+		&mockScreener{name: "empty", screen: func([]fwksched.Endpoint) []fwksched.Endpoint {
 			return nil
 		}},
-		&mockPreSchedulingCandidateFilter{name: "observe", filter: func(got []fwksched.Endpoint) []fwksched.Endpoint {
+		&mockScreener{name: "observe", screen: func(got []fwksched.Endpoint) []fwksched.Endpoint {
 			secondCalled = true
 			require.Len(t, got, len(endpoints))
 			return got
@@ -101,28 +101,28 @@ func TestRunPreSchedulingCandidateFiltersAllObserveOriginalSetAfterEmptyResult(t
 	)
 	director := &Director{requestControlPlugins: *config}
 
-	result := director.runPreSchedulingCandidateFilters(context.Background(), &fwksched.InferenceRequest{}, endpoints)
+	result := director.runScreeners(context.Background(), &fwksched.InferenceRequest{}, endpoints)
 
 	assert.True(t, secondCalled)
 	assert.Empty(t, result)
 }
 
-func TestRunPreSchedulingCandidateFiltersIsolatesPluginInputs(t *testing.T) {
+func TestRunScreenersIsolatesPluginInputs(t *testing.T) {
 	endpoints := []fwksched.Endpoint{candidateEndpoint("a"), candidateEndpoint("b")}
 	var secondInput []fwksched.Endpoint
-	config := NewConfig().WithPreSchedulingCandidateFilters(
-		&mockPreSchedulingCandidateFilter{name: "mutate-input", filter: func(got []fwksched.Endpoint) []fwksched.Endpoint {
+	config := NewConfig().WithScreeners(
+		&mockScreener{name: "mutate-input", screen: func(got []fwksched.Endpoint) []fwksched.Endpoint {
 			got[0] = candidateEndpoint("replacement")
 			return got
 		}},
-		&mockPreSchedulingCandidateFilter{name: "observe", filter: func(got []fwksched.Endpoint) []fwksched.Endpoint {
+		&mockScreener{name: "observe", screen: func(got []fwksched.Endpoint) []fwksched.Endpoint {
 			secondInput = append(secondInput, got...)
 			return got
 		}},
 	)
 	director := &Director{requestControlPlugins: *config}
 
-	director.runPreSchedulingCandidateFilters(context.Background(), &fwksched.InferenceRequest{}, endpoints)
+	director.runScreeners(context.Background(), &fwksched.InferenceRequest{}, endpoints)
 
 	require.Len(t, secondInput, 2)
 	assert.Equal(t, "a", secondInput[0].GetMetadata().Name)
