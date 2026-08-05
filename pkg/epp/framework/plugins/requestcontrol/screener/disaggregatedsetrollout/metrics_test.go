@@ -46,7 +46,7 @@ func TestMetricStrictHeaderNoMatch(t *testing.T) {
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
 	)
 
-	got := testutil.ToFloat64(strictHeaderNoMatchTotal.WithLabelValues("test-screener", "revision"))
+	got := testutil.ToFloat64(strictHeaderNoMatchTotal.WithLabelValues(PluginType, "test-screener", "revision"))
 	if got != 1 {
 		t.Fatalf("strict no-match: want 1, got %v", got)
 	}
@@ -63,7 +63,7 @@ func TestMetricRevisionGatingShare(t *testing.T) {
 
 	want := map[string]float64{"v1": 1, "v2": 0}
 	for revision, expected := range want {
-		got := testutil.ToFloat64(revisionGatingShare.WithLabelValues("test-screener", string(GatingModeSum), revision))
+		got := testutil.ToFloat64(revisionGatingShare.WithLabelValues(PluginType, "test-screener", string(GatingModeSum), revision))
 		if got != expected {
 			t.Fatalf("revision %s: want share %v, got %v", revision, expected, got)
 		}

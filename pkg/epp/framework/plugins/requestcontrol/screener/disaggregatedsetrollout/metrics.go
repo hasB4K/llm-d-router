@@ -20,31 +20,38 @@ import (
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
+	compbasemetrics "k8s.io/component-base/metrics"
 	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	metricsutil "github.com/llm-d/llm-d-router/pkg/common/observability/metrics"
+	eppmetrics "github.com/llm-d/llm-d-router/pkg/epp/metrics"
 )
 
-const (
-	metricsSubsystem = "llm_d_epp"
-	metricsPrefix    = "disaggregatedset"
-)
+const metricsPrefix = "disaggregatedset"
 
 var (
 	strictHeaderNoMatchTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
-			Subsystem: metricsSubsystem,
+			Subsystem: eppmetrics.LLMDRouterEndpointPickerSubsystem,
 			Name:      metricsPrefix + "_strict_header_no_match_total",
-			Help:      "Strict header selections that matched no endpoint and failed closed.",
+			Help: metricsutil.HelpMsgWithStability(
+				"Strict header selections that matched no endpoint and failed closed.",
+				compbasemetrics.ALPHA,
+			),
 		},
-		[]string{"plugin", "selector"},
+		[]string{"plugin_type", "plugin_name", "selector"},
 	)
 
 	revisionGatingShare = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
-			Subsystem: metricsSubsystem,
+			Subsystem: eppmetrics.LLMDRouterEndpointPickerSubsystem,
 			Name:      metricsPrefix + "_revision_gating_share",
-			Help:      "Current weighted revision gating share from 0 to 1; incomplete revisions have share 0.",
+			Help: metricsutil.HelpMsgWithStability(
+				"Current weighted revision gating share from 0 to 1; incomplete revisions have share 0.",
+				compbasemetrics.ALPHA,
+			),
 		},
-		[]string{"plugin", "mode", "revision"},
+		[]string{"plugin_type", "plugin_name", "mode", "revision"},
 	)
 )
 
@@ -60,7 +67,7 @@ func registerMetrics() {
 }
 
 func recordStrictHeaderNoMatch(pluginName, selectorName string) {
-	strictHeaderNoMatchTotal.WithLabelValues(pluginName, selectorName).Inc()
+	strictHeaderNoMatchTotal.WithLabelValues(PluginType, pluginName, selectorName).Inc()
 }
 
 func recordRevisionGatingShares(
@@ -71,10 +78,10 @@ func recordRevisionGatingShares(
 ) {
 	for revision := range previous.roleCounts {
 		if _, exists := current.roleCounts[revision]; !exists {
-			revisionGatingShare.DeleteLabelValues(pluginName, string(mode), revision)
+			revisionGatingShare.DeleteLabelValues(PluginType, pluginName, string(mode), revision)
 		}
 	}
 	for revision := range current.roleCounts {
-		revisionGatingShare.WithLabelValues(pluginName, string(mode), revision).Set(current.shares[revision])
+		revisionGatingShare.WithLabelValues(PluginType, pluginName, string(mode), revision).Set(current.shares[revision])
 	}
 }
