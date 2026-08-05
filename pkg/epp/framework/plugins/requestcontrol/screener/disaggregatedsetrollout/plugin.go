@@ -34,6 +34,7 @@ import (
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 	sourcenotifications "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/notifications"
+	podutil "github.com/llm-d/llm-d-router/pkg/epp/util/pod"
 )
 
 const (
@@ -205,7 +206,7 @@ func (c *Screener) acceptsPod(pod *corev1.Pod) bool {
 	if pod == nil || !c.config.RevisionGating.Active() {
 		return false
 	}
-	if !c.scope.Matches(labels.Set(pod.Labels)) || !isPodReady(pod) {
+	if !c.scope.Matches(labels.Set(pod.Labels)) || !podutil.IsPodReady(pod) {
 		return false
 	}
 	return pod.Labels[c.revisionLabelKey] != "" && pod.Labels[c.roleLabelKey] != ""
@@ -297,16 +298,4 @@ func (c *Screener) distributionSnapshot() revisionDistribution {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.distribution
-}
-
-func isPodReady(pod *corev1.Pod) bool {
-	if pod == nil || pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
-		return false
-	}
-	for _, condition := range pod.Status.Conditions {
-		if condition.Type == corev1.PodReady {
-			return condition.Status == corev1.ConditionTrue
-		}
-	}
-	return false
 }
