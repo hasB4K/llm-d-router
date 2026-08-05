@@ -120,17 +120,6 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 
 func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
 
-// PreferenceSelectors returns the configured soft-affinity selectors.
-func (c *Screener) PreferenceSelectors() []HeaderSelector {
-	selectors := make([]HeaderSelector, 0, len(c.config.HeaderSelectors))
-	for _, selector := range c.config.HeaderSelectors {
-		if selector.Mode == ModePrefer {
-			selectors = append(selectors, selector)
-		}
-	}
-	return selectors
-}
-
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
 // source. No controller-runtime Manager or Kubernetes client enters the plugin.
 func (c *Screener) RegisterDependencies(registrar fwkdl.Registrar) error {

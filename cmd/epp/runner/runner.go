@@ -124,8 +124,8 @@ import (
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/profilehandler/single"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/activerequest"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/contextlengthaware"
-	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/disaggregatedsetprefer"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/endpointattribute"
+	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/headerlabelaffinity"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/kvcacheutilization"
 	latencyscorer "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/latency"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/scheduling/scorer/loadaware"
@@ -581,12 +581,7 @@ func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(contextlengthaware.ContextLengthAwareType, fwkplugin.StabilityBeta, contextlengthaware.Factory)
 	// Alpha
 	fwkplugin.Register(sessionaffinity.SessionAffinityType, fwkplugin.StabilityAlpha, sessionaffinity.Factory)
-	fwkplugin.RegisterWithPluginDependencies(
-		disaggregatedsetprefer.PluginType,
-		fwkplugin.StabilityAlpha,
-		disaggregatedsetprefer.Factory,
-		disaggregatedsetprefer.ConfigParser,
-	)
+	fwkplugin.Register(headerlabelaffinity.PluginType, fwkplugin.StabilityAlpha, headerlabelaffinity.Factory)
 
 	// data layer models source/extractor
 	// Beta

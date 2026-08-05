@@ -64,8 +64,8 @@ type Scope struct {
 }
 
 // HeaderSelector defines one header/label pair to select and stamp. Strict
-// selectors are consumed by the Screener; prefer selectors are consumed by a
-// referenced DisaggregatedSet preference scorer. ResponseHeader stamps both.
+// selectors are consumed by the Screener; prefer selectors are stamped but
+// require a separately configured affinity scorer. ResponseHeader stamps both.
 type HeaderSelector struct {
 	Name       string       `json:"name"`
 	HeaderName string       `json:"headerName"`
@@ -90,9 +90,7 @@ func (s *HeaderSelector) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// SelectorMode selects which plugin consumes a header selector. Keeping the
-// mode here makes request matching and response stamping share one header/label
-// definition instead of duplicating protocol configuration across plugins.
+// SelectorMode selects whether the Screener enforces a header selector.
 type SelectorMode string
 
 const (
@@ -101,8 +99,8 @@ const (
 	// the client asked for something specific and we do not silently
 	// substitute.
 	ModeStrict SelectorMode = "strict"
-	// ModePrefer gives matching candidates a soft affinity score. Non-matching
-	// candidates remain eligible for selection.
+	// ModePrefer leaves matching to a separately configured soft-affinity
+	// scorer. The Screener only stamps this selector's response header.
 	ModePrefer SelectorMode = "prefer"
 )
 

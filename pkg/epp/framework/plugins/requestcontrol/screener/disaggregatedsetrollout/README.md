@@ -236,13 +236,15 @@ profiles need revision gating to receive the same candidate set.
 | Mode | Behavior |
 |---|---|
 | `strict` | Keeps only endpoints whose label equals the request header. No match fails closed. |
-| `prefer` | Declares a soft affinity consumed by the separate [`disaggregatedset-prefer-scorer`](../../../scheduling/scorer/disaggregatedsetprefer/README.md). Non-matching endpoints remain eligible. |
+| `prefer` | Stamps the selected label without screening candidates. Configure a [`header-label-affinity-scorer`](../../../scheduling/scorer/headerlabelaffinity/README.md) to apply the soft preference. |
 
 Every selector also stamps its configured response header from the endpoint
 that served the request. The mode identifies whether the Screener applies a
-hard constraint or the referenced preference scorer applies soft affinity;
-keeping both modes here gives matching and stamping one shared header/label
-definition. Stamping is independent of the revision gating mode.
+hard constraint or only stamps the label. Stamping is independent of the
+revision gating mode.
+
+The generic scorer repeats the `headerName` and `labelKey` mapping. Keeping its
+configuration independent allows each preference to use a different weight.
 
 ## Configuration
 
@@ -260,10 +262,28 @@ plugins:
       headerName: x-disagg-revision
       labelKey: disaggregatedset.x-k8s.io/revision
       mode: strict
+    - name: slice
+      headerName: x-disagg-slice
+      labelKey: disaggregatedset.x-k8s.io/slice
+      mode: prefer
     revisionGating:
       mode: max-role
       requireRoles:
         values: [prefill, decode]
+- type: header-label-affinity-scorer
+  name: slice-affinity
+  parameters:
+    headerName: x-disagg-slice
+    labelKey: disaggregatedset.x-k8s.io/slice
+- type: weighted-random-picker
+  name: picker
+
+schedulingProfiles:
+- name: decode
+  plugins:
+  - pluginRef: slice-affinity
+    weight: 3
+  - pluginRef: picker
 ```
 
 The Screener is discovered from the top-level `plugins` list and runs once per
@@ -274,7 +294,7 @@ request. Do not add it to a scheduling profile.
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `scope.labelSelector` | string | Yes | | Selects the Pods observed for cross-role revision coverage. |
-| `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening, preference scoring, and response-header stamping. |
+| `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening and response-header stamping. |
 | `revisionGating` | object | Yes | | Revision screening configuration. Use `mode: disabled` to retain selectors and response-header stamping without revision coverage or weighted selection. |
 | `revisionGating.mode` | string | Yes | | `sum`, `max-role`, or `disabled`. |
 | `revisionGating.requireRoles.values` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. |
@@ -288,7 +308,29 @@ Each `headerSelectors` entry has:
 | `name` | string | Stable selector identifier, used as a metric label for strict selectors. |
 | `headerName` | string | Request and response header carrying the selected label value. |
 | `labelKey` | string | Kubernetes Pod label whose value is compared with the request header and copied from the selected endpoint into the response header. |
-| `mode` | string | `strict` screens candidates globally; `prefer` is consumed by the separate preference scorer. |
+| `mode` | string | `strict` screens candidates globally; `prefer` only stamps the selected value and leaves scoring to a separate plugin. |
+
+## DisaggregatedSet Slice Affinity
+
+A `DisaggregatedSet` slice groups cooperating role replicas through the
+`disaggregatedset.x-k8s.io/slice` label. A slice can represent endpoints placed
+within one NVL72 NVLink domain. Preferring the same slice can avoid a slower
+cross-domain KV-cache transfer while retaining fallback capacity when that
+slice is unavailable or overloaded.
+
+The scorer weight represents how preferable the same NVL72 domain is relative
+to the other scorers in the profile. Benchmark same-slice and cross-slice KV
+transfers with representative traffic. Choose a weight that normally avoids a
+cross-domain transfer but still lets health and load scorers select another
+endpoint when the same-slice endpoint is overloaded.
+
+A matching endpoint receives the full configured weight and a non-matching
+endpoint receives zero. For example, assume a load scorer has weight `5`. If
+the same-slice endpoint receives a load score of `0.4` and the cross-slice
+endpoint receives `0.9`, their weighted load scores are `2.0` and `4.5`. The
+cross-slice endpoint has a `2.5` advantage, so the slice weight must be greater
+than `2.5` for the same-slice endpoint to win in that example. Production
+values depend on the other configured scorers and their runtime scores.
 
 ## Fail-Closed Behavior
 
