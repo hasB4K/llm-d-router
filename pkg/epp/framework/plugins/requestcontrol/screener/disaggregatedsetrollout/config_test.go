@@ -161,14 +161,10 @@ func TestValidate_GatingRequireRolesRejectsDuplicates(t *testing.T) {
 	assertValidateError(t, cfg, "duplicate role")
 }
 
-func TestValidate_GatingOptional(t *testing.T) {
-	// The whole gating block is optional; leaving it nil validates and
-	// simply skips wiring the gating screener at boot.
+func TestValidate_GatingRequired(t *testing.T) {
 	cfg := validConfig()
 	cfg.RevisionGating = nil
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("config without gating should validate: %v", err)
-	}
+	assertValidateError(t, cfg, "revisionGating is required")
 }
 
 func TestValidate_GatingUnknownMode(t *testing.T) {

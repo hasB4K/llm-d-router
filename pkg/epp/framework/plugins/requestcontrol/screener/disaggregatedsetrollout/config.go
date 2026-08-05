@@ -54,7 +54,7 @@ const (
 type Config struct {
 	Scope           Scope            `json:"scope"`
 	HeaderSelectors []HeaderSelector `json:"headerSelectors"`
-	RevisionGating  *RevisionGating  `json:"revisionGating,omitempty"`
+	RevisionGating  *RevisionGating  `json:"revisionGating"`
 }
 
 // Scope constrains which Pod notifications contribute to revision gating.
@@ -212,36 +212,37 @@ func (c *Config) Validate() error {
 		seenHeaders[selector.HeaderName] = struct{}{}
 	}
 
-	if c.RevisionGating != nil {
-		if c.RevisionGating.RevisionLabelKey == "" {
-			c.RevisionGating.RevisionLabelKey = DefaultRevisionLabel
+	if c.RevisionGating == nil {
+		return errors.New("revisionGating is required")
+	}
+	if c.RevisionGating.RevisionLabelKey == "" {
+		c.RevisionGating.RevisionLabelKey = DefaultRevisionLabel
+	}
+	if c.RevisionGating.RoleLabelKey == "" {
+		c.RevisionGating.RoleLabelKey = DefaultRoleLabel
+	}
+	switch c.RevisionGating.Mode {
+	case GatingModeDisabled:
+		// Nothing else to validate: disabled skips wiring.
+	case GatingModeSum, GatingModeMaxRole:
+		if c.RevisionGating.RequireRoles == nil {
+			return fmt.Errorf("revisionGating.requireRoles is required when revisionGating.mode=%s", c.RevisionGating.Mode)
 		}
-		if c.RevisionGating.RoleLabelKey == "" {
-			c.RevisionGating.RoleLabelKey = DefaultRoleLabel
+		if len(c.RevisionGating.RequireRoles.Values) == 0 {
+			return errors.New("revisionGating.requireRoles.values must contain at least one role")
 		}
-		switch c.RevisionGating.Mode {
-		case GatingModeDisabled:
-			// Nothing else to validate: disabled skips wiring.
-		case GatingModeSum, GatingModeMaxRole:
-			if c.RevisionGating.RequireRoles == nil {
-				return fmt.Errorf("revisionGating.requireRoles is required when revisionGating.mode=%s", c.RevisionGating.Mode)
+		seenRoles := make(map[string]struct{}, len(c.RevisionGating.RequireRoles.Values))
+		for i, role := range c.RevisionGating.RequireRoles.Values {
+			if role == "" {
+				return fmt.Errorf("revisionGating.requireRoles.values[%d] must not be empty", i)
 			}
-			if len(c.RevisionGating.RequireRoles.Values) == 0 {
-				return errors.New("revisionGating.requireRoles.values must contain at least one role")
+			if _, exists := seenRoles[role]; exists {
+				return fmt.Errorf("revisionGating.requireRoles.values contains duplicate role %q", role)
 			}
-			seenRoles := make(map[string]struct{}, len(c.RevisionGating.RequireRoles.Values))
-			for i, role := range c.RevisionGating.RequireRoles.Values {
-				if role == "" {
-					return fmt.Errorf("revisionGating.requireRoles.values[%d] must not be empty", i)
-				}
-				if _, exists := seenRoles[role]; exists {
-					return fmt.Errorf("revisionGating.requireRoles.values contains duplicate role %q", role)
-				}
-				seenRoles[role] = struct{}{}
-			}
-		default:
-			return fmt.Errorf("revisionGating.mode %q must be one of sum|max-role|disabled", c.RevisionGating.Mode)
+			seenRoles[role] = struct{}{}
 		}
+	default:
+		return fmt.Errorf("revisionGating.mode %q must be one of sum|max-role|disabled", c.RevisionGating.Mode)
 	}
 
 	return nil

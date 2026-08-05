@@ -271,7 +271,8 @@ request. Do not add it to a scheduling profile.
 | `scope.labelSelector` | string | Yes | | Selects the Pods observed for cross-role revision coverage. |
 | `scope.namespace` | string | No | EPP Pod `NAMESPACE` | Namespace containing the disaggregated inference Pods. |
 | `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening, preference scoring, and response-header stamping. |
-| `revisionGating.mode` | string | Yes when gating is configured | | `sum`, `max-role`, or `disabled`. |
+| `revisionGating` | object | Yes | | Revision screening configuration. Use `mode: disabled` to retain selectors and response-header stamping without revision coverage or weighted selection. |
+| `revisionGating.mode` | string | Yes | | `sum`, `max-role`, or `disabled`. |
 | `revisionGating.requireRoles.values` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. |
 | `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
 | `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |

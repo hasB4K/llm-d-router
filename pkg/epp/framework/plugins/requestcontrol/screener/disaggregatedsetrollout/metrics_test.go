@@ -39,7 +39,7 @@ func resetMetrics(t *testing.T) {
 func TestMetricStrictHeaderNoMatch(t *testing.T) {
 	resetMetrics(t)
 	config := validConfig()
-	config.RevisionGating = nil
+	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
 	screener := newTestScreener(config)
 	screener.screenStrictSelectors(context.Background(),
 		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},

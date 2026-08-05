@@ -509,7 +509,7 @@ func candidatePool(v1, v2 int) []fwksched.Endpoint {
 
 func TestStrictSelectors(t *testing.T) {
 	config := validConfig()
-	config.RevisionGating = nil
+	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
 	screener := newTestScreener(config)
 	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
