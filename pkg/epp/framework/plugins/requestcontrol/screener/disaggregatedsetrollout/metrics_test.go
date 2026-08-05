@@ -14,8 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Metric tests share process-global Prometheus collectors registered once via
-// sync.Once. Do not call t.Parallel() in this file.
 package disaggregatedsetrollout
 
 import (
@@ -29,6 +27,8 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
+// Metric tests share process-global Prometheus collectors registered once via
+// sync.Once. Do not call t.Parallel() in this file.
 func resetMetrics(t *testing.T) {
 	t.Helper()
 	registerMetrics()

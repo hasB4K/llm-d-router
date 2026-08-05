@@ -112,7 +112,7 @@ func (s *Scorer) Score(_ context.Context, request *fwksched.InferenceRequest, en
 			}
 		}
 	}
-	if activeSelectors > 1 {
+	if activeSelectors > 0 {
 		for endpoint := range scores {
 			scores[endpoint] /= float64(activeSelectors)
 		}
