@@ -27,7 +27,7 @@ import (
 // Screen applies revision gating and strict selectors before scheduling
 // profiles observe the endpoint set.
 func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
-	current := append(make([]fwksched.Endpoint, 0, len(endpoints)), endpoints...)
+	current := endpoints
 	if c.config.RevisionGating.Active() {
 		if request == nil {
 			return nil
@@ -82,7 +82,7 @@ func (c *Screener) applyRevisionDecision(
 }
 
 func (c *Screener) screenStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
-	current := append(make([]fwksched.Endpoint, 0, len(endpoints)), endpoints...)
+	current := endpoints
 	if request == nil || len(current) == 0 {
 		return current
 	}

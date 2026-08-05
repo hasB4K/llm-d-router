@@ -554,13 +554,9 @@ func setupDatastore(ctx context.Context, epFactory datalayer.EndpointFactory,
 
 // registerInTreePlugins registers the factory functions of all known plugins
 func (r *Runner) registerInTreePlugins() {
+	// request control screeners
+	// Alpha
 	fwkplugin.Register(disaggregatedsetrollout.PluginType, fwkplugin.StabilityAlpha, disaggregatedsetrollout.Factory)
-	fwkplugin.RegisterWithPluginDependencies(
-		disaggregatedsetprefer.PluginType,
-		fwkplugin.StabilityAlpha,
-		disaggregatedsetprefer.Factory,
-		disaggregatedsetprefer.ConfigParser,
-	)
 
 	// bylabel role filters
 	// Beta
@@ -585,6 +581,12 @@ func (r *Runner) registerInTreePlugins() {
 	fwkplugin.Register(contextlengthaware.ContextLengthAwareType, fwkplugin.StabilityBeta, contextlengthaware.Factory)
 	// Alpha
 	fwkplugin.Register(sessionaffinity.SessionAffinityType, fwkplugin.StabilityAlpha, sessionaffinity.Factory)
+	fwkplugin.RegisterWithPluginDependencies(
+		disaggregatedsetprefer.PluginType,
+		fwkplugin.StabilityAlpha,
+		disaggregatedsetprefer.Factory,
+		disaggregatedsetprefer.ConfigParser,
+	)
 
 	// data layer models source/extractor
 	// Beta
