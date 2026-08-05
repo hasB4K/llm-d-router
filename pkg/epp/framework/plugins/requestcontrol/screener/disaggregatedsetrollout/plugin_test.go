@@ -155,41 +155,16 @@ func TestScreenerFactoryAndPodDependency(t *testing.T) {
 	}
 }
 
-func TestScreenerFactoryResolvesScopeNamespace(t *testing.T) {
-	tests := []struct {
-		name        string
-		configured  string
-		environment string
-		want        string
-		wantError   bool
-	}{
-		{name: "EPP namespace default", environment: "router-system", want: "router-system"},
-		{name: "configured override", configured: "model-serving", environment: "router-system", want: "model-serving"},
-		{name: "unresolved", wantError: true},
+func TestScreenerWithDisabledGatingDoesNotRegisterPodDependency(t *testing.T) {
+	config := validConfig()
+	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
+	screener := newTestScreener(config)
+	registrar := &captureRegistrar{}
+	if err := screener.RegisterDependencies(registrar); err != nil {
+		t.Fatalf("RegisterDependencies: %v", err)
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			t.Setenv("NAMESPACE", test.environment)
-			config := validConfig()
-			config.Scope.Namespace = test.configured
-			raw, err := json.Marshal(config)
-			if err != nil {
-				t.Fatal(err)
-			}
-			plugin, err := Factory("rollout-screener", fwkplugin.StrictDecoder(raw), nil)
-			if test.wantError {
-				if err == nil {
-					t.Fatal("Factory accepted an unresolved scope namespace")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("Factory: %v", err)
-			}
-			if got := plugin.(*Screener).config.Scope.Namespace; got != test.want {
-				t.Fatalf("want namespace %q, got %q", test.want, got)
-			}
-		})
+	if len(registrar.registrations) != 0 {
+		t.Fatalf("want no Pod dependencies, got %d", len(registrar.registrations))
 	}
 }
 
@@ -210,9 +185,7 @@ func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
 	outOfScope.Labels["disaggregatedset.x-k8s.io/name"] = "other"
 	notReady := readyPod("p3", "v1", "decode")
 	notReady.Status.Conditions[0].Status = corev1.ConditionFalse
-	outOfNamespace := readyPod("p4", "v1", "decode")
-	outOfNamespace.Namespace = "other"
-	for _, pod := range []*corev1.Pod{inScope, outOfScope, notReady, outOfNamespace} {
+	for _, pod := range []*corev1.Pod{inScope, outOfScope, notReady} {
 		if err := handler.Extract(context.Background(), podEvent(t, pod, fwkdl.EventAddOrUpdate)); err != nil {
 			t.Fatal(err)
 		}

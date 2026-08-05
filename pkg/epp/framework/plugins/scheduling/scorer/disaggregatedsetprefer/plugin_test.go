@@ -79,7 +79,7 @@ func TestScorerAveragesMultipleSelectors(t *testing.T) {
 
 func TestFactoryLinksScreener(t *testing.T) {
 	screenerConfig := json.RawMessage(`{
-		"scope":{"labelSelector":"disaggregatedset.x-k8s.io/name=my-set","namespace":"default"},
+		"scope":{"labelSelector":"disaggregatedset.x-k8s.io/name=my-set"},
 		"headerSelectors":[{"name":"slice","headerName":"x-disagg-slice","labelKey":"disaggregatedset.x-k8s.io/slice","mode":"prefer"}],
 		"revisionGating":{"mode":"disabled"}
 	}`)

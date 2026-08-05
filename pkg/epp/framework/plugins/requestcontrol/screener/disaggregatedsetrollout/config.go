@@ -35,6 +35,7 @@ limitations under the License.
 package disaggregatedsetrollout
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -60,8 +61,6 @@ type Config struct {
 // Scope constrains which Pod notifications contribute to revision gating.
 type Scope struct {
 	LabelSelector string `json:"labelSelector"`
-	// Namespace defaults to the EPP Pod's NAMESPACE environment variable.
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // HeaderSelector defines one header/label pair to select and stamp. Strict
@@ -81,7 +80,9 @@ type HeaderSelector struct {
 func (s *HeaderSelector) UnmarshalJSON(data []byte) error {
 	type raw HeaderSelector
 	var parsed raw
-	if err := json.Unmarshal(data, &parsed); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&parsed); err != nil {
 		return err
 	}
 	parsed.HeaderName = strings.ToLower(parsed.HeaderName)
@@ -177,9 +178,6 @@ func (c *Config) Validate() error {
 	if c.Scope.LabelSelector == "" {
 		return errors.New("scope.labelSelector is required")
 	}
-	if c.Scope.Namespace == "" {
-		return errors.New("scope.namespace is required when NAMESPACE is not set")
-	}
 	if _, err := labels.Parse(c.Scope.LabelSelector); err != nil {
 		return fmt.Errorf("scope.labelSelector is not a valid label selector: %w", err)
 	}
@@ -246,15 +244,4 @@ func (c *Config) Validate() error {
 	}
 
 	return nil
-}
-
-// HasHeaderSelectorsInMode reports whether any header selector in this
-// config runs in the given mode.
-func (c *Config) HasHeaderSelectorsInMode(mode SelectorMode) bool {
-	for _, selector := range c.HeaderSelectors {
-		if selector.Mode == mode {
-			return true
-		}
-	}
-	return false
 }

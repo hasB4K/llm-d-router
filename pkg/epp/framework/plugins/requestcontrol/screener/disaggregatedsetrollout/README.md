@@ -127,10 +127,15 @@ roles and keeps only endpoints with that revision.
 
 ### Two EPPs
 
-The prefill EPP chooses a covered revision. When the selected prefill begins
-responding, the response-header hook stamps its revision. The coordinator must
-forward that header to the decode request, where the decode EPP applies it
-strictly:
+The plugin protocol can support separate prefill and decode EPPs only when the
+coordinator copies the stamped headers from the prefill response into the
+decode request. The current llm-d coordinator does not perform that forwarding,
+so this topology is not yet supported end to end. A follow-up coordinator PR
+will add it.
+
+With that forwarding in place, the prefill EPP chooses a covered revision and
+stamps it when the selected prefill begins responding. The decode EPP then
+applies the forwarded revision strictly:
 
 ```text
 prefill request -> choose revision A -> stamp revision A
@@ -215,11 +220,12 @@ It does **not** disable header selectors or response-header stamping:
 - With a revision header, a `strict` selector still keeps only matching
   endpoints and fails if none match.
 
-This supports a two-EPP flow where normal scheduling chooses the prefill, its
-revision is stamped, and the coordinator forwards that revision to the decode
-EPP. It is safe only when that header is reliably forwarded. Because coverage
-is disabled, selecting a prefill revision with no matching Ready decode causes
-the later strict decode request to fail rather than cross revisions.
+This mode supports the protocol for a two-EPP flow only when the coordinator
+reliably forwards the stamped prefill revision to the decode EPP. The current
+llm-d coordinator requires the follow-up change described above. Because
+coverage is disabled, selecting a prefill revision with no matching Ready
+decode causes the later strict decode request to fail rather than cross
+revisions.
 
 `disabled` alone does not keep the profiles of a single EPP on one revision.
 There is no response-header boundary between its profile executions, so the
@@ -248,7 +254,6 @@ plugins:
   name: rollout-screener
   parameters:
     scope:
-      namespace: llm-d
       labelSelector: "disaggregatedset.x-k8s.io/name=my-set"
     headerSelectors:
     - name: revision
@@ -269,7 +274,6 @@ request. Do not add it to a scheduling profile.
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `scope.labelSelector` | string | Yes | | Selects the Pods observed for cross-role revision coverage. |
-| `scope.namespace` | string | No | EPP Pod `NAMESPACE` | Namespace containing the disaggregated inference Pods. |
 | `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening, preference scoring, and response-header stamping. |
 | `revisionGating` | object | Yes | | Revision screening configuration. Use `mode: disabled` to retain selectors and response-header stamping without revision coverage or weighted selection. |
 | `revisionGating.mode` | string | Yes | | `sum`, `max-role`, or `disabled`. |

@@ -38,7 +38,6 @@ plugins:
   name: rollout-screener
   parameters:
     scope:
-      namespace: llm-d
       labelSelector: "disaggregatedset.x-k8s.io/name=my-set"
     headerSelectors:
     - name: revision
@@ -69,8 +68,10 @@ schedulingProfiles:
 ```
 
 In a two-EPP topology, the coordinator must copy `x-disagg-slice` from the
-prefill response into the decode request. The Screener stamps the prefill
-response header from the selected prefill endpoint's slice label.
+prefill response into the decode request. The current llm-d coordinator does
+not yet do this; a follow-up coordinator PR will add support. The Screener
+stamps the prefill response header from the selected prefill endpoint's slice
+label.
 
 ## Tuning the Weight
 

@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -90,9 +89,6 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 	if err := parameters.Decode(&config); err != nil {
 		return nil, fmt.Errorf("decode disaggregatedset-rollout-screener parameters: %w", err)
 	}
-	if config.Scope.Namespace == "" {
-		config.Scope.Namespace = os.Getenv("NAMESPACE")
-	}
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -137,6 +133,9 @@ func (c *Screener) PreferenceSelectors() []HeaderSelector {
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
 // source. No controller-runtime Manager or Kubernetes client enters the plugin.
 func (c *Screener) RegisterDependencies(registrar fwkdl.Registrar) error {
+	if !c.config.RevisionGating.Active() {
+		return nil
+	}
 	handler := &podNotificationHandler{screener: c}
 	return registrar.Register(fwkdl.PendingRegistration{
 		Owner:      c.typedName,
@@ -151,8 +150,7 @@ func (c *Screener) RegisterDependencies(registrar fwkdl.Registrar) error {
 }
 
 // ResponseHeader stamps configured selector values after the selected upstream
-// endpoint begins responding. In a two-EPP topology, the coordinator forwards
-// the prefill EPP's stamped headers to the decode request.
+// endpoint begins responding.
 func (c *Screener) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, endpoint *fwkdl.EndpointMetadata) {
 	if endpoint == nil || response == nil || response.Headers == nil {
 		return
@@ -205,9 +203,6 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 
 func (c *Screener) acceptsPod(pod *corev1.Pod) bool {
 	if pod == nil || !c.config.RevisionGating.Active() {
-		return false
-	}
-	if pod.Namespace != c.config.Scope.Namespace {
 		return false
 	}
 	if !c.scope.Matches(labels.Set(pod.Labels)) || !isPodReady(pod) {

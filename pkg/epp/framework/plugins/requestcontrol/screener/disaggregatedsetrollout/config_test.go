@@ -26,7 +26,6 @@ func validConfig() Config {
 	return Config{
 		Scope: Scope{
 			LabelSelector: "disaggregatedset.x-k8s.io/name=my-set",
-			Namespace:     testNS,
 		},
 		HeaderSelectors: []HeaderSelector{
 			{
@@ -56,12 +55,6 @@ func TestValidate_MissingScopeSelector(t *testing.T) {
 	cfg := validConfig()
 	cfg.Scope.LabelSelector = ""
 	assertValidateError(t, cfg, "scope.labelSelector")
-}
-
-func TestValidate_MissingScopeNamespace(t *testing.T) {
-	cfg := validConfig()
-	cfg.Scope.Namespace = ""
-	assertValidateError(t, cfg, "scope.namespace")
 }
 
 func TestValidate_UnparsableScopeSelector(t *testing.T) {
@@ -242,6 +235,14 @@ func TestSelector_UnmarshalJSON_LowercasesHeaderName(t *testing.T) {
 	}
 	if selector.HeaderName != "x-disagg-revision" {
 		t.Fatalf("header not lowered on unmarshal: got %q", selector.HeaderName)
+	}
+}
+
+func TestSelector_UnmarshalJSON_RejectsUnknownFields(t *testing.T) {
+	raw := []byte(`{"name":"revision","headerName":"x-disagg-revision","labelKey":"lk","mode":"strict","unknown":"value"}`)
+	var selector HeaderSelector
+	if err := json.Unmarshal(raw, &selector); err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("want unknown field error, got %v", err)
 	}
 }
 
