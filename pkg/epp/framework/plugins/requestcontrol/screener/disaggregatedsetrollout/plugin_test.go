@@ -168,59 +168,39 @@ func TestScreenerWithDisabledGatingDoesNotRegisterPodDependency(t *testing.T) {
 	}
 }
 
-func TestScreenerReadinessRequiresInitialPodSnapshot(t *testing.T) {
+func TestScreenerReadinessRequiresInitialPodSync(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	if err := screener.CheckReady(); err == nil {
-		t.Fatal("CheckReady() succeeded before the initial Pod snapshot")
+		t.Fatal("CheckReady() succeeded before the initial Pod synchronization")
 	}
 
 	handler := &podNotificationHandler{screener: screener}
-	events := []fwkdl.NotificationEvent{
+	for _, event := range []fwkdl.NotificationEvent{
 		podEvent(t, readyPod("v1-prefill", "v1", "prefill"), fwkdl.EventAddOrUpdate),
 		podEvent(t, readyPod("v1-decode", "v1", "decode"), fwkdl.EventAddOrUpdate),
+	} {
+		if err := handler.Extract(context.Background(), event); err != nil {
+			t.Fatalf("Extract: %v", err)
+		}
 	}
-	if err := handler.InitialSnapshot(context.Background(), events); err != nil {
-		t.Fatalf("InitialSnapshot: %v", err)
+	if err := screener.CheckReady(); err == nil {
+		t.Fatal("CheckReady() succeeded before synchronization completed")
 	}
+	handler.InitialSyncComplete()
 	if err := screener.CheckReady(); err != nil {
-		t.Fatalf("CheckReady() after initial Pod snapshot: %v", err)
+		t.Fatalf("CheckReady() after initial Pod synchronization: %v", err)
 	}
 	if got := screener.distributionSnapshot().shares["v1"]; got != 1 {
 		t.Fatalf("snapshot share = %v, want 1", got)
 	}
 }
 
-func TestScreenerEmptyInitialPodSnapshotIsReady(t *testing.T) {
+func TestScreenerEmptyInitialPodSyncIsReady(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	handler := &podNotificationHandler{screener: screener}
-	if err := handler.InitialSnapshot(context.Background(), nil); err != nil {
-		t.Fatalf("InitialSnapshot: %v", err)
-	}
+	handler.InitialSyncComplete()
 	if err := screener.CheckReady(); err != nil {
-		t.Fatalf("CheckReady() after empty initial Pod snapshot: %v", err)
-	}
-}
-
-func TestScreenerInitialPodSnapshotReplacesCachedPods(t *testing.T) {
-	screener := newTestScreener(validConfig())
-	seedPods(t, screener,
-		readyPod("old-prefill", "old", "prefill"),
-		readyPod("old-decode", "old", "decode"),
-	)
-	handler := &podNotificationHandler{screener: screener}
-	events := []fwkdl.NotificationEvent{
-		podEvent(t, readyPod("new-prefill", "new", "prefill"), fwkdl.EventAddOrUpdate),
-		podEvent(t, readyPod("new-decode", "new", "decode"), fwkdl.EventAddOrUpdate),
-	}
-	if err := handler.InitialSnapshot(context.Background(), events); err != nil {
-		t.Fatalf("InitialSnapshot: %v", err)
-	}
-	distribution := screener.distributionSnapshot()
-	if _, found := distribution.shares["old"]; found {
-		t.Fatalf("initial snapshot retained stale revision: %#v", distribution.shares)
-	}
-	if got := distribution.shares["new"]; got != 1 {
-		t.Fatalf("snapshot share = %v, want 1", got)
+		t.Fatalf("CheckReady() after empty initial Pod synchronization: %v", err)
 	}
 }
 
