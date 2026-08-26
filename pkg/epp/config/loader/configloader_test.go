@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -40,6 +41,7 @@ import (
 	fwkfcmocks "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol/mocks"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
+	crossplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/cross_plugin"
 	extractormetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/metrics"
 	sourcemetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/metrics"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/fairness/globalstrict"
@@ -73,6 +75,39 @@ const (
 
 	testFeatureGate = "test-feature-gate"
 )
+
+type syncerConsumerPlugin struct {
+	syncer fwkdl.CrossReplicaSyncer
+}
+
+func (p *syncerConsumerPlugin) TypedName() fwkplugin.TypedName {
+	return fwkplugin.TypedName{Type: "syncer-consumer", Name: "syncer-consumer"}
+}
+
+func (p *syncerConsumerPlugin) SetCrossReplicaSyncer(syncer fwkdl.CrossReplicaSyncer) error {
+	p.syncer = syncer
+	return nil
+}
+
+func TestInjectCrossReplicaSyncer(t *testing.T) {
+	handle := fwkplugin.NewEppHandle(context.Background(), nil)
+	consumer := &syncerConsumerPlugin{}
+	handle.AddPlugin("consumer", consumer)
+	syncer := crossplugin.NewLocalSyncer("local", "replica")
+
+	require.NoError(t, injectCrossReplicaSyncer(handle, syncer, logr.Discard()))
+	require.Same(t, syncer, consumer.syncer)
+}
+
+func TestInjectCrossReplicaSyncerWithoutSyncerLogsOnce(t *testing.T) {
+	handle := fwkplugin.NewEppHandle(context.Background(), nil)
+	handle.AddPlugin("first", &syncerConsumerPlugin{})
+	handle.AddPlugin("second", &syncerConsumerPlugin{})
+	writer := &strings.Builder{}
+
+	require.NoError(t, injectCrossReplicaSyncer(handle, nil, logging.NewTestLoggerWithWriter(writer)))
+	require.Equal(t, 1, strings.Count(writer.String(), "Cross-replica synchronization is not configured"))
+}
 
 // --- Test: Phase 1 (Raw Loading & Static Defaults) ---
 

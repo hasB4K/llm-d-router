@@ -21,27 +21,46 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
+	"time"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 )
 
-const LocalSyncerType = "local-syncer"
+const (
+	LocalSyncerType  = "local-syncer"
+	localGetOrSetTTL = 10 * time.Minute
+)
 
 var _ fwkdl.CrossReplicaSyncer = (*LocalSyncer)(nil)
 
-// LocalSyncer is an in-memory mock CrossReplicaSyncer for single-replica
-// deployments and testing. No cross-replica sync is performed.
+// LocalSyncer is an in-memory CrossReplicaSyncer for single-replica
+// deployments and tests. No cross-replica sync is performed.
 type LocalSyncer struct {
 	typedName fwkplugin.TypedName
 	replicaID string
 	data      sync.Map // key: "replicaID:StateKey:endpointID", value: any
+
+	decisionMu sync.Mutex
+	decisions  map[decisionKey]decisionValue
+	lastSweep  time.Time
+}
+
+type decisionKey struct {
+	stateKey fwkdl.StateKey
+	id       string
+}
+
+type decisionValue struct {
+	value     any
+	expiresAt time.Time
 }
 
 func NewLocalSyncer(name, replicaID string) *LocalSyncer {
 	return &LocalSyncer{
 		typedName: fwkplugin.TypedName{Type: LocalSyncerType, Name: name},
 		replicaID: replicaID,
+		decisions: make(map[decisionKey]decisionValue),
 	}
 }
 
@@ -74,4 +93,31 @@ func (s *LocalSyncer) Get(_ context.Context, key fwkdl.StateKey, endpointID stri
 func (s *LocalSyncer) Delete(_ context.Context, key fwkdl.StateKey, endpointID string) error {
 	s.data.Delete(s.syncKey(key, endpointID))
 	return nil
+}
+
+// GetOrSet coordinates a value within this process. It is suitable for a
+// single EPP replica and for tests, but does not synchronize across replicas.
+func (s *LocalSyncer) GetOrSet(_ context.Context, key fwkdl.StateKey, id string, candidate any) (any, bool, error) {
+	now := time.Now()
+	s.decisionMu.Lock()
+	defer s.decisionMu.Unlock()
+
+	if s.lastSweep.IsZero() || now.Sub(s.lastSweep) >= time.Minute {
+		for storedKey, stored := range s.decisions {
+			if !now.Before(stored.expiresAt) {
+				delete(s.decisions, storedKey)
+			}
+		}
+		s.lastSweep = now
+	}
+
+	decisionKey := decisionKey{stateKey: key, id: id}
+	if stored, ok := s.decisions[decisionKey]; ok {
+		if now.Before(stored.expiresAt) {
+			return stored.value, true, nil
+		}
+		delete(s.decisions, decisionKey)
+	}
+	s.decisions[decisionKey] = decisionValue{value: candidate, expiresAt: now.Add(localGetOrSetTTL)}
+	return candidate, false, nil
 }

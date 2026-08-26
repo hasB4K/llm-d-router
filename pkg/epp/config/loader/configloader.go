@@ -207,6 +207,9 @@ func InstantiateAndConfigure(
 	if err != nil {
 		return nil, fmt.Errorf("data layer config build failed: %w", err)
 	}
+	if err := injectCrossReplicaSyncer(handle, dataConfig.Syncer, logger); err != nil {
+		return nil, fmt.Errorf("cross-replica syncer injection failed: %w", err)
+	}
 	if len(dataConfig.Sources) == 0 {
 		logger.Info("No data sources configured; metrics collection is disabled")
 	}
@@ -248,6 +251,27 @@ func InstantiateAndConfigure(
 		FlowControlConfig:  flowControlConfig,
 		ParserRegistry:     parserRegistry,
 	}, nil
+}
+
+func injectCrossReplicaSyncer(handle fwkplugin.Handle, syncer fwkdl.CrossReplicaSyncer, logger logr.Logger) error {
+	hasConsumer := false
+	for _, candidate := range handle.GetAllPlugins() {
+		consumer, ok := candidate.(fwkdl.CrossReplicaSyncerConsumer)
+		if !ok {
+			continue
+		}
+		if syncer == nil {
+			hasConsumer = true
+			continue
+		}
+		if err := consumer.SetCrossReplicaSyncer(syncer); err != nil {
+			return fmt.Errorf("plugin %s rejected syncer %s: %w", candidate.TypedName(), syncer.TypedName(), err)
+		}
+	}
+	if syncer == nil && hasConsumer {
+		logger.Info("Cross-replica synchronization is not configured; plugins are using single-replica state")
+	}
+	return nil
 }
 
 // flowControlSettingsConfigured reports whether the flowControl config section carries settings
