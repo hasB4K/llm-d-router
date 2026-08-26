@@ -25,6 +25,7 @@ import (
 	"sync/atomic"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -56,10 +57,10 @@ type Screener struct {
 	revisionLabelKey string
 	roleLabelKey     string
 
-	mu                     sync.RWMutex
-	pods                   map[types.NamespacedName]podInfo
-	distribution           revisionDistribution
-	initialPodSyncComplete atomic.Bool
+	mu                         sync.RWMutex
+	pods                       map[types.NamespacedName]podInfo
+	distribution               revisionDistribution
+	initialPodSnapshotComplete atomic.Bool
 }
 
 type podInfo struct {
@@ -73,15 +74,15 @@ type revisionDistribution struct {
 }
 
 var (
-	errInitialPodSyncPending = errors.New("initial Pod synchronization pending")
+	errInitialPodSnapshotPending = errors.New("initial Pod snapshot pending")
 
-	_ fwkplugin.Plugin                = (*Screener)(nil)
-	_ fwkplugin.ReadinessChecker      = (*Screener)(nil)
-	_ fwkrc.Screener                  = (*Screener)(nil)
-	_ fwkrc.ResponseHeaderProcessor   = (*Screener)(nil)
-	_ fwkdl.Registrant                = (*Screener)(nil)
-	_ fwkdl.NotificationExtractor     = (*podNotificationHandler)(nil)
-	_ fwkdl.NotificationSyncExtractor = (*podNotificationHandler)(nil)
+	_ fwkplugin.Plugin                    = (*Screener)(nil)
+	_ fwkplugin.ReadinessChecker          = (*Screener)(nil)
+	_ fwkrc.Screener                      = (*Screener)(nil)
+	_ fwkrc.ResponseHeaderProcessor       = (*Screener)(nil)
+	_ fwkdl.Registrant                    = (*Screener)(nil)
+	_ fwkdl.NotificationExtractor         = (*podNotificationHandler)(nil)
+	_ fwkdl.NotificationSnapshotExtractor = (*podNotificationHandler)(nil)
 )
 
 // Factory creates a disaggregatedset-rollout-screener from normal plugin parameters.
@@ -126,12 +127,13 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 
 func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
 
-// CheckReady reports whether revision gating has processed the initial Pods.
+// CheckReady reports whether revision gating has received its initial Pod
+// snapshot. Configurations without revision gating need no Pod snapshot.
 func (c *Screener) CheckReady() error {
-	if !c.config.RevisionGating.Active() || c.initialPodSyncComplete.Load() {
+	if !c.config.RevisionGating.Active() || c.initialPodSnapshotComplete.Load() {
 		return nil
 	}
-	return errInitialPodSyncPending
+	return errInitialPodSnapshotPending
 }
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
@@ -176,8 +178,24 @@ func (h *podNotificationHandler) TypedName() fwkplugin.TypedName {
 
 func (h *podNotificationHandler) GVK() schema.GroupVersionKind { return podGVK }
 
-func (h *podNotificationHandler) InitialSyncComplete() {
-	h.screener.initialPodSyncComplete.Store(true)
+// InitialSnapshot replaces the cached Pod state before normal notifications
+// are delivered. An empty snapshot is still a completed initial synchronization.
+func (h *podNotificationHandler) InitialSnapshot(_ context.Context, events []fwkdl.NotificationEvent) error {
+	pods := make(map[types.NamespacedName]podInfo, len(events))
+	for _, event := range events {
+		if event.Type == fwkdl.EventDelete || event.Object == nil {
+			continue
+		}
+		key, info, accepted, err := h.podInfo(event.Object)
+		if err != nil {
+			return err
+		}
+		if accepted {
+			pods[key] = info
+		}
+	}
+	h.screener.replacePods(pods)
+	return nil
 }
 
 func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.NotificationEvent) error {
@@ -190,23 +208,43 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 		return nil
 	}
 
-	pod := &corev1.Pod{}
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(event.Object.Object, pod); err != nil {
-		return fmt.Errorf("convert Pod notification %s: %w", key, err)
+	key, info, accepted, err := h.podInfo(event.Object)
+	if err != nil {
+		return err
 	}
-	if !h.screener.acceptsPod(pod) {
+	if !accepted {
 		h.screener.removePod(key)
 		return nil
 	}
 
 	h.screener.mu.Lock()
-	h.screener.pods[key] = podInfo{
-		revision: pod.Labels[h.screener.revisionLabelKey],
-		role:     pod.Labels[h.screener.roleLabelKey],
-	}
+	h.screener.pods[key] = info
 	h.screener.rebuildDistributionLocked()
 	h.screener.mu.Unlock()
 	return nil
+}
+
+func (h *podNotificationHandler) podInfo(object *unstructured.Unstructured) (types.NamespacedName, podInfo, bool, error) {
+	key := types.NamespacedName{Name: object.GetName(), Namespace: object.GetNamespace()}
+	pod := &corev1.Pod{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(object.Object, pod); err != nil {
+		return key, podInfo{}, false, fmt.Errorf("convert Pod notification %s: %w", key, err)
+	}
+	if !h.screener.acceptsPod(pod) {
+		return key, podInfo{}, false, nil
+	}
+	return key, podInfo{
+		revision: pod.Labels[h.screener.revisionLabelKey],
+		role:     pod.Labels[h.screener.roleLabelKey],
+	}, true, nil
+}
+
+func (c *Screener) replacePods(pods map[types.NamespacedName]podInfo) {
+	c.mu.Lock()
+	c.pods = pods
+	c.rebuildDistributionLocked()
+	c.mu.Unlock()
+	c.initialPodSnapshotComplete.Store(true)
 }
 
 func (c *Screener) acceptsPod(pod *corev1.Pod) bool {

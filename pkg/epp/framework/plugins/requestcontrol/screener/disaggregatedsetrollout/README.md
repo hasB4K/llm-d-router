@@ -339,8 +339,8 @@ has at least one Ready Pod. If no revision survives, request control returns
 HTTP 503.
 
 When revision gating is enabled, EPP does not report ready until the Screener
-has processed the initial Pod cache. Kubernetes therefore does not send traffic
-during cache initialization. After EPP is ready, a revision that loses a
+has applied a complete initial Pod snapshot. Kubernetes therefore does not send
+traffic during cache initialization. After EPP is ready, a revision that loses a
 required role still returns HTTP 503 until the role is Ready again.
 
 A strict header with no matching endpoint also returns HTTP 503. The plugin

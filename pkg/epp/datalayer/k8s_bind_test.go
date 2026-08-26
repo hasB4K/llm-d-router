@@ -32,14 +32,19 @@ import (
 	sourcenotifications "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/notifications"
 )
 
-type initialSyncCaptureExtractor struct {
+type snapshotCaptureExtractor struct {
 	*extractormocks.NotificationExtractor
-	initialSyncComplete bool
+	snapshots [][]fwkdl.NotificationEvent
 }
 
-func (e *initialSyncCaptureExtractor) InitialSyncComplete() { e.initialSyncComplete = true }
+func (e *snapshotCaptureExtractor) InitialSnapshot(_ context.Context, events []fwkdl.NotificationEvent) error {
+	snapshot := make([]fwkdl.NotificationEvent, len(events))
+	copy(snapshot, events)
+	e.snapshots = append(e.snapshots, snapshot)
+	return nil
+}
 
-func TestNotificationReconcilerInitialSync(t *testing.T) {
+func TestNotificationReconcilerInitialSnapshot(t *testing.T) {
 	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -49,38 +54,65 @@ func TestNotificationReconcilerInitialSync(t *testing.T) {
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "default"}},
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-b", Namespace: "default"}},
 	).Build()
-	syncExtractor := &initialSyncCaptureExtractor{
-		NotificationExtractor: extractormocks.NewNotificationExtractor("initial-sync"),
+	snapshotter := &snapshotCaptureExtractor{
+		NotificationExtractor: extractormocks.NewNotificationExtractor("snapshot"),
 	}
 	regular := extractormocks.NewNotificationExtractor("regular")
 	reconciler := &notificationReconciler{
-		client:                client,
-		src:                   sourcenotifications.NewK8sNotificationSource(sourcenotifications.NotificationSourceType, "pods", gvk),
-		extractors:            []fwkdl.NotificationExtractor{syncExtractor, regular},
-		initialSyncExtractors: []fwkdl.NotificationSyncExtractor{syncExtractor},
-		gvk:                   gvk,
-		log:                   logr.Discard(),
+		client:              client,
+		src:                 sourcenotifications.NewK8sNotificationSource(sourcenotifications.NotificationSourceType, "pods", gvk),
+		extractors:          []fwkdl.NotificationExtractor{snapshotter, regular},
+		snapshotExtractors:  []fwkdl.NotificationSnapshotExtractor{snapshotter},
+		initialSnapshotDone: make(chan struct{}),
+		gvk:                 gvk,
+		log:                 logr.Discard(),
 	}
 
-	if err := reconciler.runInitialSync(context.Background()); err != nil {
-		t.Fatalf("runInitialSync: %v", err)
+	if err := reconciler.takeInitialSnapshot(context.Background()); err != nil {
+		t.Fatalf("takeInitialSnapshot: %v", err)
 	}
-	if !syncExtractor.initialSyncComplete {
-		t.Fatal("extractor was not notified of initial synchronization")
+	select {
+	case <-reconciler.initialSnapshotDone:
+	default:
+		t.Fatal("initial snapshot completion was not signaled")
 	}
-	got := syncExtractor.GetEvents()
+	if len(snapshotter.snapshots) != 1 {
+		t.Fatalf("got %d snapshots, want 1", len(snapshotter.snapshots))
+	}
+	got := snapshotter.snapshots[0]
 	if len(got) != 2 {
-		t.Fatalf("got %d initial events, want 2", len(got))
+		t.Fatalf("got %d snapshot events, want 2", len(got))
 	}
 	for _, event := range got {
 		if event.Type != fwkdl.EventAddOrUpdate {
-			t.Fatalf("initial event type = %v, want add or update", event.Type)
+			t.Fatalf("snapshot event type = %v, want add or update", event.Type)
 		}
 		if event.Object == nil || event.Object.GroupVersionKind() != gvk {
-			t.Fatalf("initial event has unexpected object: %#v", event.Object)
+			t.Fatalf("snapshot event has unexpected object: %#v", event.Object)
 		}
 	}
 	if got := regular.GetEvents(); len(got) != 0 {
-		t.Fatalf("regular extractor received initial synchronization events: %#v", got)
+		t.Fatalf("regular extractor received initial snapshot events: %#v", got)
+	}
+}
+
+func TestNotificationReconcilerWaitForInitialSnapshot(t *testing.T) {
+	reconciler := &notificationReconciler{initialSnapshotDone: make(chan struct{})}
+	result := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		result <- reconciler.waitForInitialSnapshot(context.Background())
+	}()
+	<-started
+	select {
+	case err := <-result:
+		t.Fatalf("waitForInitialSnapshot returned before completion: %v", err)
+	default:
+	}
+
+	close(reconciler.initialSnapshotDone)
+	if err := <-result; err != nil {
+		t.Fatalf("waitForInitialSnapshot: %v", err)
 	}
 }
