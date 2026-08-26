@@ -19,6 +19,7 @@ package disaggregatedsetrollout
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
@@ -466,6 +468,163 @@ func TestScreenerWeightedDistribution(t *testing.T) {
 				t.Fatalf("want v2 share %.3f +/- .03, got %.3f", test.wantShare, share)
 			}
 		})
+	}
+}
+
+type decisionSyncer struct {
+	actual any
+	err    error
+	calls  int
+	ids    []string
+}
+
+func (s *decisionSyncer) TypedName() fwkplugin.TypedName {
+	return fwkplugin.TypedName{Type: "decision-syncer", Name: "decision-syncer"}
+}
+
+func (s *decisionSyncer) Set(context.Context, fwkdl.StateKey, string, any) error { return nil }
+
+func (s *decisionSyncer) Get(context.Context, fwkdl.StateKey, string, func([]any) any) (any, bool, error) {
+	return nil, false, nil
+}
+
+func (s *decisionSyncer) Delete(context.Context, fwkdl.StateKey, string) error { return nil }
+
+func (s *decisionSyncer) GetOrSet(_ context.Context, _ fwkdl.StateKey, id string, _ any) (any, bool, error) {
+	s.calls++
+	s.ids = append(s.ids, id)
+	return s.actual, true, s.err
+}
+
+func TestScreenerUsesSharedRevisionDecisionID(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	syncer := &decisionSyncer{actual: "v2"}
+	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
+		t.Fatal(err)
+	}
+
+	request := &fwksched.InferenceRequest{Headers: map[string]string{
+		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
+		reqcommon.RequestIDHeaderKey:          "request-id",
+	}}
+	got := screenCandidates(t, screener, request, candidatePool(1, 1))
+	if len(got) != 1 || got[0].GetMetadata().Labels[testRevLabel] != "v2" {
+		t.Fatalf("shared decision did not pin revision v2: %v", got)
+	}
+	if syncer.calls != 1 || len(syncer.ids) != 1 || syncer.ids[0] != "decision-id" {
+		t.Fatalf("GetOrSet calls = %d, ids = %v", syncer.calls, syncer.ids)
+	}
+}
+
+func TestScreenerUsesRequestIDWithoutRevisionDecisionID(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	syncer := &decisionSyncer{actual: "v2"}
+	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
+		t.Fatal(err)
+	}
+
+	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RequestIDHeaderKey: "request-id"}}
+	got := screenCandidates(t, screener, request, candidatePool(1, 1))
+	if len(got) != 1 || got[0].GetMetadata().Labels[testRevLabel] != "v2" {
+		t.Fatalf("request ID fallback did not pin revision v2: %v", got)
+	}
+	if syncer.calls != 1 || len(syncer.ids) != 1 || syncer.ids[0] != "request-id" {
+		t.Fatalf("GetOrSet calls = %d, ids = %v", syncer.calls, syncer.ids)
+	}
+}
+
+func TestScreenerRejectsNonStringRevisionDecision(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
+	if err := screener.SetCrossReplicaSyncer(&decisionSyncer{actual: 1}); err != nil {
+		t.Fatal(err)
+	}
+
+	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RevisionDecisionIDHeaderKey: "decision-id"}}
+	if got := screenCandidates(t, screener, request, candidatePool(1, 0)); len(got) != 0 {
+		t.Fatalf("non-string revision decision must fail closed, got %v", got)
+	}
+}
+
+func TestScreenerLocalRoutingDecisionIsStable(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RevisionDecisionIDHeaderKey: "decision-id"}}
+	first := screenCandidates(t, screener, request, []fwksched.Endpoint{endpoint("v1", revLabels("v1"))})
+	if len(first) != 1 {
+		t.Fatalf("initial local decision returned %v", first)
+	}
+	second := screenCandidates(t, screener, request, candidatePool(1, 1))
+	if len(second) != 1 || second[0].GetMetadata().Labels[testRevLabel] != "v1" {
+		t.Fatalf("local decision was not stable: %v", second)
+	}
+}
+
+func TestScreenerSharedRoutingDecisionFailureFailsClosed(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
+	if err := screener.SetCrossReplicaSyncer(&decisionSyncer{err: errors.New("store unavailable")}); err != nil {
+		t.Fatal(err)
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RevisionDecisionIDHeaderKey: "decision-id"}}
+	if got := screenCandidates(t, screener, request, candidatePool(1, 0)); len(got) != 0 {
+		t.Fatalf("sync failure must fail closed, got %v", got)
+	}
+}
+
+func TestScreenerStrictRevisionBypassesSharedRoutingDecision(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
+	syncer := &decisionSyncer{err: errors.New("must not be called")}
+	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
+		t.Fatal(err)
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{
+		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
+		"x-disagg-revision":                   "v1",
+	}}
+	got := screenCandidates(t, screener, request, candidatePool(1, 0))
+	if len(got) != 1 || syncer.calls != 0 {
+		t.Fatalf("strict revision should bypass GetOrSet: endpoints=%v calls=%d", got, syncer.calls)
+	}
+}
+
+func TestScreenerStrictNonRevisionSelectorStillCoordinatesRevision(t *testing.T) {
+	config := validConfig()
+	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
+		Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "disaggregatedset.x-k8s.io/slice", Mode: ModeStrict,
+	})
+	screener := newTestScreener(config)
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	syncer := &decisionSyncer{actual: "v2"}
+	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
+		t.Fatal(err)
+	}
+	candidates := candidatePool(1, 1)
+	for _, candidate := range candidates {
+		candidate.GetMetadata().Labels["disaggregatedset.x-k8s.io/slice"] = "slice-a"
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{
+		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
+		"x-disagg-slice":                      "slice-a",
+	}}
+	got := screenCandidates(t, screener, request, candidates)
+	if len(got) != 1 || got[0].GetMetadata().Labels[testRevLabel] != "v2" || syncer.calls != 1 {
+		t.Fatalf("slice selector bypassed revision coordination: endpoints=%v calls=%d", got, syncer.calls)
 	}
 }
 

@@ -33,6 +33,7 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
+	crossplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/cross_plugin"
 	sourcenotifications "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/notifications"
 	podutil "github.com/llm-d/llm-d-router/pkg/epp/util/pod"
 )
@@ -54,6 +55,8 @@ type Screener struct {
 	scope            labels.Selector
 	revisionLabelKey string
 	roleLabelKey     string
+	decisionStateKey fwkdl.StateKey
+	syncer           fwkdl.CrossReplicaSyncer
 
 	mu           sync.RWMutex
 	pods         map[types.NamespacedName]podInfo
@@ -71,11 +74,12 @@ type revisionDistribution struct {
 }
 
 var (
-	_ fwkplugin.Plugin              = (*Screener)(nil)
-	_ fwkrc.Screener                = (*Screener)(nil)
-	_ fwkrc.ResponseHeaderProcessor = (*Screener)(nil)
-	_ fwkdl.Registrant              = (*Screener)(nil)
-	_ fwkdl.NotificationExtractor   = (*podNotificationHandler)(nil)
+	_ fwkplugin.Plugin                 = (*Screener)(nil)
+	_ fwkrc.Screener                   = (*Screener)(nil)
+	_ fwkrc.ResponseHeaderProcessor    = (*Screener)(nil)
+	_ fwkdl.Registrant                 = (*Screener)(nil)
+	_ fwkdl.CrossReplicaSyncerConsumer = (*Screener)(nil)
+	_ fwkdl.NotificationExtractor      = (*podNotificationHandler)(nil)
 )
 
 // Factory creates a disaggregatedset-rollout-screener from normal plugin parameters.
@@ -114,11 +118,23 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 		scope:            scope,
 		revisionLabelKey: revisionLabelKey,
 		roleLabelKey:     roleLabelKey,
+		decisionStateKey: fwkdl.StateKey("disaggregatedset-rollout:" + name),
+		syncer:           crossplugin.NewLocalSyncer(name+"/local", "local"),
 		pods:             make(map[types.NamespacedName]podInfo),
 	}
 }
 
 func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
+
+// SetCrossReplicaSyncer replaces the single-replica local fallback with the
+// framework-configured cross-replica syncer.
+func (c *Screener) SetCrossReplicaSyncer(syncer fwkdl.CrossReplicaSyncer) error {
+	if syncer == nil {
+		return errors.New("cross-replica syncer must not be nil")
+	}
+	c.syncer = syncer
+	return nil
+}
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
 // source. No controller-runtime Manager or Kubernetes client enters the plugin.

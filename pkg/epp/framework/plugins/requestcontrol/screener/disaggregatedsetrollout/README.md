@@ -103,9 +103,12 @@ and role. For a request without a strict revision header, it then:
 1. Removes every revision that has no Ready Pod for any required role, because
    a revision missing one role cannot serve the request.
 2. Computes a weight for each remaining revision.
-3. Randomly chooses one revision using those weights.
-4. Exposes only that revision's endpoints to all scheduling profiles.
-5. Stamps the selected endpoint's revision into the configured response header.
+3. Randomly chooses one candidate revision using those weights.
+4. When the request carries `x-llm-d-revision-decision-id`, or falls back to
+   `x-request-id`, atomically stores or reads the revision decision through the
+   configured `CrossReplicaSyncer`.
+5. Exposes only the resulting revision's endpoints to all scheduling profiles.
+6. Stamps the selected endpoint's revision into the configured response header.
 
 ```text
 Ready Pod counts
@@ -127,22 +130,20 @@ roles and keeps only endpoints with that revision.
 
 ### Two EPPs
 
-The plugin protocol can support separate prefill and decode EPPs only when the
-coordinator copies the stamped headers from the prefill response into the
-decode request. The current llm-d coordinator does not perform that forwarding,
-so this topology is not yet supported end to end. A follow-up coordinator PR
-will add it.
+Separate phase EPPs must make the same revision decision even though each one
+schedules independently. The coordinator generates one
+`x-llm-d-revision-decision-id` for the request and sends it to every encode,
+prefill, and decode EPP request.
 
-With that forwarding in place, the prefill EPP chooses a covered revision and
-stamps it when the selected prefill begins responding. The decode EPP then
-applies the forwarded revision strictly:
+Each Screener can propose a covered revision, but atomic `GetOrSet` makes the
+first stored revision authoritative. In E/P/D, parallel encode requests can
+therefore begin together without waiting for one encode response. Prefill and
+decode use the same decision ID and receive the same revision.
 
-```text
-prefill request -> choose revision A -> stamp revision A
-                                             |
-                                             v
-decode request with revision A -> keep only revision A decodes
-```
+With a configured `CrossReplicaSyncer`, this coordination works when requests
+are distributed across multiple EPP replicas. Without one, the plugin uses an
+in-memory implementation. That fallback is safe only when a single EPP replica
+handles the pool.
 
 ### One EPP
 
@@ -220,16 +221,8 @@ It does **not** disable header selectors or response-header stamping:
 - With a revision header, a `strict` selector still keeps only matching
   endpoints and fails if none match.
 
-This mode supports the protocol for a two-EPP flow only when the coordinator
-reliably forwards the stamped prefill revision to the decode EPP. The current
-llm-d coordinator requires the follow-up change described above. Because
-coverage is disabled, selecting a prefill revision with no matching Ready
-decode causes the later strict decode request to fail rather than cross
-revisions.
-
-`disabled` alone does not keep the profiles of a single EPP on one revision.
-There is no response-header boundary between its profile executions, so the
-profiles need revision gating to receive the same candidate set.
+This mode does not make a revision decision. It cannot keep separate EPPs, or
+the profiles of a single EPP, on one revision.
 
 ## Header Selectors
 

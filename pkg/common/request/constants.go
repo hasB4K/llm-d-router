@@ -17,7 +17,8 @@ limitations under the License.
 package request
 
 const (
-	RequestIDHeaderKey = "x-request-id"
+	RequestIDHeaderKey          = "x-request-id"
+	RevisionDecisionIDHeaderKey = "x-llm-d-revision-decision-id"
 
 	FieldKVTransferParams     = "kv_transfer_params"
 	FieldECTransferParams     = "ec_transfer_params"

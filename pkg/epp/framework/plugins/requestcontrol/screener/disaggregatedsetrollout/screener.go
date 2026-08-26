@@ -21,6 +21,9 @@ import (
 	"math/rand/v2"
 	"sort"
 
+	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
@@ -50,8 +53,26 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 			allowedRevisions[revision] = struct{}{}
 		}
 		chosenRevision := ""
-		if !c.hasStrictHeader(request) {
+		if !c.hasStrictRevisionHeader(request) {
 			chosenRevision = pickWeightedRevision(shares, rand.Float64())
+			if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {
+				actual, _, err := c.syncer.GetOrSet(
+					ctx,
+					c.decisionStateKey,
+					decisionID,
+					chosenRevision,
+				)
+				if err != nil {
+					log.FromContext(ctx).Error(err, "failed to coordinate rollout revision")
+					return nil
+				}
+				sharedRevision, ok := actual.(string)
+				if !ok || sharedRevision == "" {
+					log.FromContext(ctx).Error(nil, "cross-replica syncer returned an invalid rollout revision")
+					return nil
+				}
+				chosenRevision = sharedRevision
+			}
 		}
 		current = c.applyRevisionDecision(current, allowedRevisions, chosenRevision)
 		if len(current) == 0 {
@@ -59,6 +80,16 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 		}
 	}
 	return c.screenStrictSelectors(ctx, request, current)
+}
+
+func revisionDecisionID(request *fwksched.InferenceRequest) string {
+	if request == nil {
+		return ""
+	}
+	if decisionID := request.Headers[reqcommon.RevisionDecisionIDHeaderKey]; decisionID != "" {
+		return decisionID
+	}
+	return request.Headers[reqcommon.RequestIDHeaderKey]
 }
 
 func (c *Screener) applyRevisionDecision(
@@ -116,12 +147,12 @@ func (c *Screener) screenStrictSelectors(_ context.Context, request *fwksched.In
 	return current
 }
 
-func (c *Screener) hasStrictHeader(request *fwksched.InferenceRequest) bool {
+func (c *Screener) hasStrictRevisionHeader(request *fwksched.InferenceRequest) bool {
 	if request == nil {
 		return false
 	}
 	for _, selector := range c.config.HeaderSelectors {
-		if selector.Mode == ModeStrict && request.Headers[selector.HeaderName] != "" {
+		if selector.Mode == ModeStrict && selector.LabelKey == c.revisionLabelKey && request.Headers[selector.HeaderName] != "" {
 			return true
 		}
 	}
