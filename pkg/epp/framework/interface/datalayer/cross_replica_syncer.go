@@ -45,26 +45,29 @@ type CrossReplicaSyncer interface {
 	Delete(ctx context.Context, key StateKey, endpointID string) error
 
 	// GetOrSet atomically returns the value already stored for key and id, or
-	// stores candidate and returns it. Unlike Set and Get, this value is global
-	// rather than per-replica. Implementations own a fixed expiration period.
+	// stores candidate and returns it. This is global request-level state shared
+	// across EPP replicas, not per-endpoint state. Use it only when exact
+	// coordination is required. Implementations own a fixed expiration period.
 	// The bool reports whether the returned value already existed. Implementations
 	// must provide linearizable behavior across every EPP replica sharing the syncer.
 	GetOrSet(ctx context.Context, key StateKey, id string, candidate any) (actual any, existed bool, err error)
 }
 
-// CrossReplicaSyncerConsumer receives the configured CrossReplicaSyncer for
-// request-level coordination with atomic operations such as GetOrSet. Prefer
-// CrossReplicaContributor for state that can tolerate periodic synchronization.
-// Use a consumer only when precise coordination cannot tolerate that delay.
-type CrossReplicaSyncerConsumer interface {
-	SetCrossReplicaSyncer(CrossReplicaSyncer) error
-}
-
-// CrossReplicaContributor publishes per-endpoint state for cross-replica
-// aggregation. The runtime detects this interface and wires the aggregate into
-// the plugin's endpoint attribute.
+// CrossReplicaContributor is an opt-in interface for endpoint extractors that
+// want their installed attributes to reflect cross-replica aggregate state.
+// The plugin's Extract method is unchanged; the runtime detects this interface
+// and wires the store transparently. Prefer it for per-endpoint state that can
+// tolerate periodic synchronization.
 type CrossReplicaContributor interface {
 	CrossReplicaState() CrossReplicaSpec
+}
+
+// CrossReplicaSyncerConsumer receives the configured CrossReplicaSyncer for
+// exact request-level coordination with atomic operations such as GetOrSet.
+// Use it only when a CrossReplicaContributor cannot tolerate periodic
+// synchronization.
+type CrossReplicaSyncerConsumer interface {
+	SetCrossReplicaSyncer(CrossReplicaSyncer) error
 }
 
 // CrossReplicaSpec declares what a CrossReplicaContributor publishes and where.
