@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -50,16 +49,14 @@ var podGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
 // Screener gates revisions and applies strict selectors before scheduling.
 // ResponseHeader stamps the selected endpoint's labels.
 type Screener struct {
-	typedName        fwkplugin.TypedName
-	config           Config
-	scope            labels.Selector
-	revisionLabelKey string
-	roleLabelKey     string
-	decisionStateKey fwkdl.StateKey
-	syncer           fwkdl.CrossReplicaSyncer
-	localDecisionMu  sync.Mutex
-	localDecisions   map[string]localRevisionDecision
-	lastLocalSweep   time.Time
+	typedName                fwkplugin.TypedName
+	config                   Config
+	scope                    labels.Selector
+	revisionLabelKey         string
+	roleLabelKey             string
+	revisionDecisionStateKey fwkdl.StateKey
+	syncer                   fwkdl.CrossReplicaSyncer
+	localRevisionDecisions   localGetOrSet
 
 	mu           sync.RWMutex
 	pods         map[types.NamespacedName]podInfo
@@ -116,14 +113,13 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 		roleLabelKey = config.RevisionGating.RoleLabelKey
 	}
 	return &Screener{
-		typedName:        fwkplugin.TypedName{Type: PluginType, Name: name},
-		config:           config,
-		scope:            scope,
-		revisionLabelKey: revisionLabelKey,
-		roleLabelKey:     roleLabelKey,
-		decisionStateKey: fwkdl.StateKey("disaggregatedset-rollout:" + name),
-		localDecisions:   make(map[string]localRevisionDecision),
-		pods:             make(map[types.NamespacedName]podInfo),
+		typedName:                fwkplugin.TypedName{Type: PluginType, Name: name},
+		config:                   config,
+		scope:                    scope,
+		revisionLabelKey:         revisionLabelKey,
+		roleLabelKey:             roleLabelKey,
+		revisionDecisionStateKey: fwkdl.StateKey("disaggregatedset-rollout:" + name),
+		pods:                     make(map[types.NamespacedName]podInfo),
 	}
 }
 

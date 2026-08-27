@@ -21,7 +21,6 @@ import (
 	"errors"
 	"math/rand/v2"
 	"sort"
-	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -29,17 +28,7 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-const (
-	localRevisionDecisionTTL           = 10 * time.Minute
-	localRevisionDecisionSweepInterval = time.Minute
-)
-
 var errInvalidSharedRevision = errors.New("cross-replica syncer returned an invalid rollout revision")
-
-type localRevisionDecision struct {
-	revision  string
-	expiresAt time.Time
-}
 
 // Screen applies revision gating and strict selectors before scheduling
 // profiles observe the endpoint set.
@@ -98,11 +87,11 @@ func revisionDecisionID(request *fwksched.InferenceRequest) string {
 
 func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (string, error) {
 	if c.syncer == nil {
-		revision, _ := c.getOrSetLocalRevision(id, candidate)
+		revision, _ := c.localRevisionDecisions.GetOrSet(id, candidate)
 		return revision, nil
 	}
 
-	actual, _, err := c.syncer.GetOrSet(ctx, c.decisionStateKey, id, candidate)
+	actual, _, err := c.syncer.GetOrSet(ctx, c.revisionDecisionStateKey, id, candidate)
 	if err != nil {
 		return "", err
 	}
@@ -111,35 +100,6 @@ func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (
 		return "", errInvalidSharedRevision
 	}
 	return revision, nil
-}
-
-func (c *Screener) getOrSetLocalRevision(id, candidate string) (string, bool) {
-	now := time.Now()
-	c.localDecisionMu.Lock()
-	defer c.localDecisionMu.Unlock()
-
-	if c.localDecisions == nil {
-		c.localDecisions = make(map[string]localRevisionDecision)
-	}
-	if c.lastLocalSweep.IsZero() || now.Sub(c.lastLocalSweep) >= localRevisionDecisionSweepInterval {
-		for storedID, decision := range c.localDecisions {
-			if !now.Before(decision.expiresAt) {
-				delete(c.localDecisions, storedID)
-			}
-		}
-		c.lastLocalSweep = now
-	}
-	if decision, found := c.localDecisions[id]; found {
-		if now.Before(decision.expiresAt) {
-			return decision.revision, true
-		}
-		delete(c.localDecisions, id)
-	}
-	c.localDecisions[id] = localRevisionDecision{
-		revision:  candidate,
-		expiresAt: now.Add(localRevisionDecisionTTL),
-	}
-	return candidate, false
 }
 
 func (c *Screener) applyRevisionDecision(

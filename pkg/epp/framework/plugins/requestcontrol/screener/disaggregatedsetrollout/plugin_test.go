@@ -23,9 +23,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"sync"
 	"testing"
-	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -570,59 +568,6 @@ func TestScreenerLocalRoutingDecisionIsStable(t *testing.T) {
 	second := screenCandidates(t, screener, request, candidatePool(1, 1))
 	if len(second) != 1 || second[0].GetMetadata().Labels[testRevLabel] != "v1" {
 		t.Fatalf("local decision was not stable: %v", second)
-	}
-}
-
-func TestScreenerLocalRevisionDecisionIsAtomic(t *testing.T) {
-	screener := newTestScreener(validConfig())
-	const callers = 32
-	results := make(chan string, callers)
-	created := make(chan bool, callers)
-
-	var group sync.WaitGroup
-	for i := range callers {
-		group.Add(1)
-		go func(i int) {
-			defer group.Done()
-			revision, existed := screener.getOrSetLocalRevision("decision-id", fmt.Sprintf("revision-%d", i))
-			results <- revision
-			created <- !existed
-		}(i)
-	}
-	group.Wait()
-	close(results)
-	close(created)
-
-	var winner string
-	for revision := range results {
-		if winner == "" {
-			winner = revision
-		}
-		if revision != winner {
-			t.Fatalf("local decisions differ: %q and %q", winner, revision)
-		}
-	}
-	createdCount := 0
-	for wasCreated := range created {
-		if wasCreated {
-			createdCount++
-		}
-	}
-	if createdCount != 1 {
-		t.Fatalf("created count = %d, want 1", createdCount)
-	}
-}
-
-func TestScreenerLocalRevisionDecisionExpires(t *testing.T) {
-	screener := newTestScreener(validConfig())
-	screener.localDecisions["decision-id"] = localRevisionDecision{
-		revision:  "old-revision",
-		expiresAt: time.Now().Add(-time.Second),
-	}
-
-	revision, existed := screener.getOrSetLocalRevision("decision-id", "new-revision")
-	if existed || revision != "new-revision" {
-		t.Fatalf("expired local decision = (%q, %t), want (new-revision, false)", revision, existed)
 	}
 }
 
