@@ -41,7 +41,6 @@ import (
 	fwkfcmocks "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/flowcontrol/mocks"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	crossplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/cross_plugin"
 	extractormetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/metrics"
 	sourcemetrics "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/metrics"
 	"github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/flowcontrol/fairness/globalstrict"
@@ -80,6 +79,28 @@ type syncerConsumerPlugin struct {
 	syncer fwkdl.CrossReplicaSyncer
 }
 
+type testCrossReplicaSyncer struct{}
+
+func (testCrossReplicaSyncer) TypedName() fwkplugin.TypedName {
+	return fwkplugin.TypedName{Type: "test-syncer", Name: "test-syncer"}
+}
+
+func (testCrossReplicaSyncer) Set(context.Context, fwkdl.StateKey, string, any) error {
+	return nil
+}
+
+func (testCrossReplicaSyncer) Get(context.Context, fwkdl.StateKey, string, func([]any) any) (any, bool, error) {
+	return nil, false, nil
+}
+
+func (testCrossReplicaSyncer) Delete(context.Context, fwkdl.StateKey, string) error {
+	return nil
+}
+
+func (testCrossReplicaSyncer) GetOrSet(_ context.Context, _ fwkdl.StateKey, _ string, candidate any) (any, bool, error) {
+	return candidate, false, nil
+}
+
 func (p *syncerConsumerPlugin) TypedName() fwkplugin.TypedName {
 	return fwkplugin.TypedName{Type: "syncer-consumer", Name: "syncer-consumer"}
 }
@@ -93,7 +114,7 @@ func TestInjectCrossReplicaSyncer(t *testing.T) {
 	handle := fwkplugin.NewEppHandle(context.Background(), nil)
 	consumer := &syncerConsumerPlugin{}
 	handle.AddPlugin("consumer", consumer)
-	syncer := crossplugin.NewLocalSyncer("local", "replica")
+	syncer := &testCrossReplicaSyncer{}
 
 	require.NoError(t, injectCrossReplicaSyncer(handle, syncer, logr.Discard()))
 	require.Same(t, syncer, consumer.syncer)
