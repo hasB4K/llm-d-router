@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -33,7 +34,6 @@ import (
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
-	crossplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/cross_plugin"
 	sourcenotifications "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/notifications"
 	podutil "github.com/llm-d/llm-d-router/pkg/epp/util/pod"
 )
@@ -57,6 +57,9 @@ type Screener struct {
 	roleLabelKey     string
 	decisionStateKey fwkdl.StateKey
 	syncer           fwkdl.CrossReplicaSyncer
+	localDecisionMu  sync.Mutex
+	localDecisions   map[string]localRevisionDecision
+	lastLocalSweep   time.Time
 
 	mu           sync.RWMutex
 	pods         map[types.NamespacedName]podInfo
@@ -119,15 +122,14 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 		revisionLabelKey: revisionLabelKey,
 		roleLabelKey:     roleLabelKey,
 		decisionStateKey: fwkdl.StateKey("disaggregatedset-rollout:" + name),
-		syncer:           crossplugin.NewLocalSyncer(name+"/local", "local"),
+		localDecisions:   make(map[string]localRevisionDecision),
 		pods:             make(map[types.NamespacedName]podInfo),
 	}
 }
 
 func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
 
-// SetCrossReplicaSyncer replaces the single-replica local fallback with the
-// framework-configured cross-replica syncer.
+// SetCrossReplicaSyncer configures cross-replica revision coordination.
 func (c *Screener) SetCrossReplicaSyncer(syncer fwkdl.CrossReplicaSyncer) error {
 	if syncer == nil {
 		return errors.New("cross-replica syncer must not be nil")

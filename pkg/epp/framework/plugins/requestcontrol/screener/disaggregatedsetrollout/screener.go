@@ -18,14 +18,28 @@ package disaggregatedsetrollout
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
 	"sort"
+	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
+
+const (
+	localRevisionDecisionTTL           = 10 * time.Minute
+	localRevisionDecisionSweepInterval = time.Minute
+)
+
+var errInvalidSharedRevision = errors.New("cross-replica syncer returned an invalid rollout revision")
+
+type localRevisionDecision struct {
+	revision  string
+	expiresAt time.Time
+}
 
 // Screen applies revision gating and strict selectors before scheduling
 // profiles observe the endpoint set.
@@ -56,22 +70,12 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 		if !c.hasStrictRevisionHeader(request) {
 			chosenRevision = pickWeightedRevision(shares, rand.Float64())
 			if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {
-				actual, _, err := c.syncer.GetOrSet(
-					ctx,
-					c.decisionStateKey,
-					decisionID,
-					chosenRevision,
-				)
+				var err error
+				chosenRevision, err = c.getOrSetRevision(ctx, decisionID, chosenRevision)
 				if err != nil {
 					log.FromContext(ctx).Error(err, "failed to coordinate rollout revision")
 					return nil
 				}
-				sharedRevision, ok := actual.(string)
-				if !ok || sharedRevision == "" {
-					log.FromContext(ctx).Error(nil, "cross-replica syncer returned an invalid rollout revision")
-					return nil
-				}
-				chosenRevision = sharedRevision
 			}
 		}
 		current = c.applyRevisionDecision(current, allowedRevisions, chosenRevision)
@@ -90,6 +94,52 @@ func revisionDecisionID(request *fwksched.InferenceRequest) string {
 		return decisionID
 	}
 	return request.Headers[reqcommon.RequestIDHeaderKey]
+}
+
+func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (string, error) {
+	if c.syncer == nil {
+		revision, _ := c.getOrSetLocalRevision(id, candidate)
+		return revision, nil
+	}
+
+	actual, _, err := c.syncer.GetOrSet(ctx, c.decisionStateKey, id, candidate)
+	if err != nil {
+		return "", err
+	}
+	revision, ok := actual.(string)
+	if !ok || revision == "" {
+		return "", errInvalidSharedRevision
+	}
+	return revision, nil
+}
+
+func (c *Screener) getOrSetLocalRevision(id, candidate string) (string, bool) {
+	now := time.Now()
+	c.localDecisionMu.Lock()
+	defer c.localDecisionMu.Unlock()
+
+	if c.localDecisions == nil {
+		c.localDecisions = make(map[string]localRevisionDecision)
+	}
+	if c.lastLocalSweep.IsZero() || now.Sub(c.lastLocalSweep) >= localRevisionDecisionSweepInterval {
+		for storedID, decision := range c.localDecisions {
+			if !now.Before(decision.expiresAt) {
+				delete(c.localDecisions, storedID)
+			}
+		}
+		c.lastLocalSweep = now
+	}
+	if decision, found := c.localDecisions[id]; found {
+		if now.Before(decision.expiresAt) {
+			return decision.revision, true
+		}
+		delete(c.localDecisions, id)
+	}
+	c.localDecisions[id] = localRevisionDecision{
+		revision:  candidate,
+		expiresAt: now.Add(localRevisionDecisionTTL),
+	}
+	return candidate, false
 }
 
 func (c *Screener) applyRevisionDecision(

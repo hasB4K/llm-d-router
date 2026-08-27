@@ -106,7 +106,8 @@ and role. For a request without a strict revision header, it then:
 3. Randomly chooses one candidate revision using those weights.
 4. When the request carries `x-llm-d-revision-decision-id`, or falls back to
    `x-request-id`, atomically stores or reads the revision decision through the
-   configured `CrossReplicaSyncer`.
+   configured `CrossReplicaSyncer`. Without one, it stores the decision in the
+   local EPP process.
 5. Exposes only the resulting revision's endpoints to all scheduling profiles.
 6. Stamps the selected endpoint's revision into the configured response header.
 
@@ -141,9 +142,9 @@ therefore begin together without waiting for one encode response. Prefill and
 decode use the same decision ID and receive the same revision.
 
 With a configured `CrossReplicaSyncer`, this coordination works when requests
-are distributed across multiple EPP replicas. Without one, the plugin uses an
-in-memory implementation. That fallback is safe only when a single EPP replica
-handles the pool.
+are distributed across multiple EPP replicas. Without one, the Screener stores
+decisions locally. That fallback is safe only when a single EPP replica handles
+the pool.
 
 ### One EPP
 
