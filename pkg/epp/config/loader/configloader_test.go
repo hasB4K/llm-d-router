@@ -25,7 +25,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-logr/logr"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -75,10 +74,6 @@ const (
 	testFeatureGate = "test-feature-gate"
 )
 
-type syncerConsumerPlugin struct {
-	syncer fwkdl.CrossReplicaSyncer
-}
-
 type testCrossReplicaSyncer struct{}
 
 func (testCrossReplicaSyncer) TypedName() fwkplugin.TypedName {
@@ -101,33 +96,15 @@ func (testCrossReplicaSyncer) GetOrSet(_ context.Context, _ fwkdl.StateKey, _ st
 	return candidate, false, nil
 }
 
-func (p *syncerConsumerPlugin) TypedName() fwkplugin.TypedName {
-	return fwkplugin.TypedName{Type: "syncer-consumer", Name: "syncer-consumer"}
-}
-
-func (p *syncerConsumerPlugin) SetCrossReplicaSyncer(syncer fwkdl.CrossReplicaSyncer) error {
-	p.syncer = syncer
-	return nil
-}
-
-func TestInjectCrossReplicaSyncer(t *testing.T) {
+func TestBuildDataLayerConfigExposesCrossReplicaSyncerOnHandle(t *testing.T) {
 	handle := fwkplugin.NewEppHandle(context.Background(), nil)
-	consumer := &syncerConsumerPlugin{}
-	handle.AddPlugin("consumer", consumer)
 	syncer := &testCrossReplicaSyncer{}
+	handle.AddPlugin("syncer", syncer)
 
-	require.NoError(t, injectCrossReplicaSyncer(handle, syncer, logr.Discard()))
-	require.Same(t, syncer, consumer.syncer)
-}
-
-func TestInjectCrossReplicaSyncerWithoutSyncerLogsOnce(t *testing.T) {
-	handle := fwkplugin.NewEppHandle(context.Background(), nil)
-	handle.AddPlugin("first", &syncerConsumerPlugin{})
-	handle.AddPlugin("second", &syncerConsumerPlugin{})
-	writer := &strings.Builder{}
-
-	require.NoError(t, injectCrossReplicaSyncer(handle, nil, logging.NewTestLoggerWithWriter(writer)))
-	require.Equal(t, 1, strings.Count(writer.String(), "Cross-replica synchronization is not configured"))
+	cfg, err := buildDataLayerConfig(&configapi.DataLayerConfig{CrossReplicaSyncerPluginRef: "syncer"}, handle)
+	require.NoError(t, err)
+	require.Same(t, syncer, cfg.Syncer)
+	require.Same(t, syncer, handle.CrossReplicaSyncer())
 }
 
 // --- Test: Phase 1 (Raw Loading & Static Defaults) ---

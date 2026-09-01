@@ -62,14 +62,6 @@ type CrossReplicaContributor interface {
 	CrossReplicaState() CrossReplicaSpec
 }
 
-// CrossReplicaSyncerConsumer receives the configured CrossReplicaSyncer for
-// exact request-level coordination with atomic operations such as GetOrSet.
-// Use it only when a CrossReplicaContributor cannot tolerate periodic
-// synchronization.
-type CrossReplicaSyncerConsumer interface {
-	SetCrossReplicaSyncer(CrossReplicaSyncer) error
-}
-
 // CrossReplicaSpec declares what a CrossReplicaContributor publishes and where.
 type CrossReplicaSpec struct {
 	// StateKey namespaces this contributor's data in the store.
