@@ -18,9 +18,12 @@ package disaggregatedsetrollout
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"sort"
+	"strconv"
+	"strings"
 
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -28,54 +31,49 @@ import (
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-var errInvalidSharedRevision = errors.New("cross-replica syncer returned an invalid rollout revision")
+var errInvalidSharedDecision = errors.New("cross-replica syncer returned an invalid compatibility decision")
 
 // Screen applies revision gating and strict selectors before scheduling
 // profiles observe the endpoint set.
 func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
-	current := endpoints
-	if c.config.RevisionGating.Active() {
-		if request == nil {
-			return nil
-		}
-		seenRevisions := uniqueRevisions(current, c.revisionLabelKey)
-		distribution := c.distributionSnapshot()
-		// TODO: Make the initial Pod snapshot a condition of EPP readiness.
-		// Until a generic readiness hook exists, an empty snapshot fails closed.
-		shares := make(map[string]float64, len(seenRevisions))
-		allowedRevisions := make(map[string]struct{}, len(seenRevisions))
-		for revision := range seenRevisions {
-			share := distribution.shares[revision]
-			// If one required role is missing, this revision cannot serve a
-			// disaggregated request yet. Missing roles and revisions absent
-			// from the warmed distribution both resolve to zero and fail closed.
-			if share == 0 {
-				continue
-			}
-			shares[revision] = share
-			allowedRevisions[revision] = struct{}{}
-		}
-		chosenRevision := ""
-		if !c.hasStrictRevisionHeader(request) {
-			chosenRevision = pickWeightedRevision(shares, rand.Float64())
-			if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {
-				var err error
-				chosenRevision, err = c.getOrSetRevision(ctx, decisionID, chosenRevision)
-				if err != nil {
-					log.FromContext(ctx).Error(err, "failed to coordinate rollout revision")
-					return nil
-				}
-			}
-		}
-		current = c.applyRevisionDecision(current, allowedRevisions, chosenRevision)
-		if len(current) == 0 {
+	if !c.config.RevisionGating.Active() {
+		return c.screenStrictSelectors(ctx, request, endpoints)
+	}
+	if request == nil {
+		return nil
+	}
+
+	// TODO: Make the initial Pod snapshot a condition of EPP readiness.
+	// Until a generic readiness hook exists, an empty snapshot fails closed.
+	domains := c.eligibleDomains(request, endpoints, c.distributionSnapshot())
+	if len(domains) == 0 {
+		return nil
+	}
+
+	chosen := pickWeightedDecision(domains, rand.Float64())
+	if chosen.Revision == "" {
+		return nil
+	}
+	if decisionID := compatibilityDecisionID(request); decisionID != "" {
+		var err error
+		chosen, err = c.getOrSetDecision(ctx, decisionID, chosen)
+		if err != nil {
+			log.FromContext(ctx).Error(err, "failed to coordinate compatibility decision")
 			return nil
 		}
 	}
-	return c.screenStrictSelectors(ctx, request, current)
+
+	// A decision returned by a different EPP replica must satisfy this
+	// request's strict headers and be covered by this local Pod snapshot.
+	if !c.matchesStrictHeaders(request, chosen) || !containsDecision(domains, c.decisionKey(chosen)) {
+		return nil
+	}
+	return c.applyDecision(endpoints, chosen)
 }
 
-func revisionDecisionID(request *fwksched.InferenceRequest) string {
+// compatibilityDecisionID uses the coordinator-provided revision-decision ID
+// as the correlation key for the complete compatibility decision.
+func compatibilityDecisionID(request *fwksched.InferenceRequest) string {
 	if request == nil {
 		return ""
 	}
@@ -85,43 +83,142 @@ func revisionDecisionID(request *fwksched.InferenceRequest) string {
 	return request.Headers[reqcommon.RequestIDHeaderKey]
 }
 
-func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (string, error) {
-	if c.syncer == nil {
-		revision, _ := c.localRevisionDecisions.GetOrSet(id, candidate)
-		return revision, nil
+func (c *Screener) getOrSetDecision(ctx context.Context, id string, candidate compatibilityDecision) (compatibilityDecision, error) {
+	encodedCandidate, err := json.Marshal(candidate)
+	if err != nil {
+		return compatibilityDecision{}, err
 	}
 
-	actual, _, err := c.syncer.GetOrSet(ctx, c.revisionDecisionStateKey, id, candidate)
-	if err != nil {
-		return "", err
+	var actual string
+	if c.syncer == nil {
+		actual, _ = c.localDecisions.GetOrSet(id, string(encodedCandidate))
+	} else {
+		value, _, getOrSetErr := c.syncer.GetOrSet(ctx, c.compatibilityDecisionStateKey, id, string(encodedCandidate))
+		if getOrSetErr != nil {
+			return compatibilityDecision{}, getOrSetErr
+		}
+		var ok bool
+		actual, ok = value.(string)
+		if !ok {
+			return compatibilityDecision{}, errInvalidSharedDecision
+		}
 	}
-	revision, ok := actual.(string)
-	if !ok || revision == "" {
-		return "", errInvalidSharedRevision
+
+	decision := compatibilityDecision{}
+	if err := json.Unmarshal([]byte(actual), &decision); err != nil || !c.validDecision(decision) {
+		return compatibilityDecision{}, errInvalidSharedDecision
 	}
-	return revision, nil
+	return decision, nil
 }
 
-func (c *Screener) applyRevisionDecision(
+func (c *Screener) validDecision(decision compatibilityDecision) bool {
+	if decision.Revision == "" || len(decision.Labels) != len(c.strictDecisionLabelKeys) {
+		return false
+	}
+	for _, labelKey := range c.strictDecisionLabelKeys {
+		if decision.Labels[labelKey] == "" {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Screener) eligibleDomains(
+	request *fwksched.InferenceRequest,
 	endpoints []fwksched.Endpoint,
-	allowedRevisions map[string]struct{},
-	chosenRevision string,
-) []fwksched.Endpoint {
-	result := make([]fwksched.Endpoint, 0, len(endpoints))
-	for _, endpoint := range endpoints {
-		if endpoint == nil || endpoint.GetMetadata() == nil {
+	distribution compatibilityDistribution,
+) []decisionDomain {
+	result := make([]decisionDomain, 0, len(distribution.domains))
+	for _, domain := range distribution.domains {
+		if !c.matchesStrictHeaders(request, domain.decision) || !c.hasEndpointForDecision(endpoints, domain.decision) {
 			continue
 		}
-		revision := endpoint.GetMetadata().Labels[c.revisionLabelKey]
-		if _, covered := allowedRevisions[revision]; !covered {
-			continue
-		}
-		if chosenRevision != "" && revision != chosenRevision {
-			continue
-		}
-		result = append(result, endpoint)
+		result = append(result, domain)
 	}
 	return result
+}
+
+func (c *Screener) matchesStrictHeaders(request *fwksched.InferenceRequest, decision compatibilityDecision) bool {
+	if request == nil {
+		return true
+	}
+	for _, selector := range c.config.HeaderSelectors {
+		if selector.Mode != ModeStrict {
+			continue
+		}
+		requested := request.Headers[selector.HeaderName]
+		if requested == "" {
+			continue
+		}
+
+		actual := decision.Labels[selector.LabelKey]
+		if selector.LabelKey == c.revisionLabelKey {
+			actual = decision.Revision
+		}
+		if actual != requested {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Screener) hasEndpointForDecision(endpoints []fwksched.Endpoint, decision compatibilityDecision) bool {
+	for _, endpoint := range endpoints {
+		if c.endpointMatchesDecision(endpoint, decision) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Screener) applyDecision(endpoints []fwksched.Endpoint, decision compatibilityDecision) []fwksched.Endpoint {
+	result := make([]fwksched.Endpoint, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		if c.endpointMatchesDecision(endpoint, decision) {
+			result = append(result, endpoint)
+		}
+	}
+	return result
+}
+
+func (c *Screener) endpointMatchesDecision(endpoint fwksched.Endpoint, decision compatibilityDecision) bool {
+	if endpoint == nil || endpoint.GetMetadata() == nil {
+		return false
+	}
+	endpointLabels := endpoint.GetMetadata().Labels
+	if endpointLabels[c.revisionLabelKey] != decision.Revision {
+		return false
+	}
+	for _, labelKey := range c.strictDecisionLabelKeys {
+		if endpointLabels[labelKey] != decision.Labels[labelKey] {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Screener) decisionKey(decision compatibilityDecision) string {
+	var builder strings.Builder
+	appendDecisionPart(&builder, decision.Revision)
+	for _, labelKey := range c.strictDecisionLabelKeys {
+		appendDecisionPart(&builder, decision.Labels[labelKey])
+	}
+	return builder.String()
+}
+
+func appendDecisionPart(builder *strings.Builder, value string) {
+	builder.WriteString(strconv.Itoa(len(value)))
+	builder.WriteByte(':')
+	builder.WriteString(value)
+}
+
+func containsDecision(domains []decisionDomain, key string) bool {
+	for _, domain := range domains {
+		if domain.key == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Screener) screenStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
@@ -157,29 +254,30 @@ func (c *Screener) screenStrictSelectors(_ context.Context, request *fwksched.In
 	return current
 }
 
-func (c *Screener) hasStrictRevisionHeader(request *fwksched.InferenceRequest) bool {
-	if request == nil {
-		return false
+func pickWeightedDecision(domains []decisionDomain, draw float64) compatibilityDecision {
+	if len(domains) == 0 {
+		return compatibilityDecision{}
 	}
-	for _, selector := range c.config.HeaderSelectors {
-		if selector.Mode == ModeStrict && selector.LabelKey == c.revisionLabelKey && request.Headers[selector.HeaderName] != "" {
-			return true
-		}
-	}
-	return false
-}
+	ordered := append([]decisionDomain(nil), domains...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].key < ordered[j].key })
 
-func uniqueRevisions(endpoints []fwksched.Endpoint, revisionLabelKey string) map[string]struct{} {
-	seen := make(map[string]struct{})
-	for _, endpoint := range endpoints {
-		if endpoint == nil || endpoint.GetMetadata() == nil {
-			continue
-		}
-		if revision := endpoint.GetMetadata().Labels[revisionLabelKey]; revision != "" {
-			seen[revision] = struct{}{}
+	total := 0
+	for _, domain := range ordered {
+		total += domain.weight
+	}
+	if total == 0 {
+		return compatibilityDecision{}
+	}
+
+	x := draw * float64(total)
+	cumulative := 0
+	for _, domain := range ordered {
+		cumulative += domain.weight
+		if x < float64(cumulative) {
+			return domain.decision
 		}
 	}
-	return seen
+	return ordered[len(ordered)-1].decision
 }
 
 func revisionSumWeight(perRole map[string]int, required []string) (int, bool) {
@@ -192,29 +290,4 @@ func revisionSumWeight(perRole map[string]int, required []string) (int, bool) {
 		weight += count
 	}
 	return weight, true
-}
-
-func pickWeightedRevision(shares map[string]float64, draw float64) string {
-	revisions := make([]string, 0, len(shares))
-	total := 0.0
-	for revision, share := range shares {
-		revisions = append(revisions, revision)
-		total += share
-	}
-	if total == 0 {
-		return ""
-	}
-	sort.Strings(revisions)
-	if len(revisions) == 1 {
-		return revisions[0]
-	}
-	x := draw * total
-	cumulative := 0.0
-	for _, revision := range revisions {
-		cumulative += shares[revision]
-		if x < cumulative {
-			return revision
-		}
-	}
-	return revisions[len(revisions)-1]
 }

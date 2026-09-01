@@ -40,10 +40,11 @@ import (
 )
 
 const (
-	testRevLabel  = "disaggregatedset.x-k8s.io/revision"
-	testRoleLabel = "disaggregatedset.x-k8s.io/role"
-	testNS        = "default"
-	testSelector  = "disaggregatedset.x-k8s.io/name=my-set"
+	testRevLabel   = "disaggregatedset.x-k8s.io/revision"
+	testRoleLabel  = "disaggregatedset.x-k8s.io/role"
+	testSliceLabel = "disaggregatedset.x-k8s.io/slice"
+	testNS         = "default"
+	testSelector   = "disaggregatedset.x-k8s.io/name=my-set"
 )
 
 func readyPod(name, revision, role string) *corev1.Pod {
@@ -64,6 +65,14 @@ func readyPod(name, revision, role string) *corev1.Pod {
 			},
 		},
 	}
+}
+
+func readyPodWithLabels(name, revision, role string, extraLabels map[string]string) *corev1.Pod {
+	pod := readyPod(name, revision, role)
+	for key, value := range extraLabels {
+		pod.Labels[key] = value
+	}
+	return pod
 }
 
 func newTestScreener(config Config) *Screener {
@@ -385,13 +394,16 @@ func TestRevisionModesCacheExpectedShares(t *testing.T) {
 	}
 }
 
-func TestPickWeightedRevision(t *testing.T) {
-	shares := map[string]float64{"v1": 0.75, "v2": 0.25}
-	if got := pickWeightedRevision(shares, 0); got != "v1" {
-		t.Fatalf("draw 0 selected %q, want v1", got)
+func TestPickWeightedDecision(t *testing.T) {
+	domains := []decisionDomain{
+		{key: "v1", decision: compatibilityDecision{Revision: "v1"}, weight: 3},
+		{key: "v2", decision: compatibilityDecision{Revision: "v2"}, weight: 1},
 	}
-	if got := pickWeightedRevision(shares, 0.9); got != "v2" {
-		t.Fatalf("draw 0.9 selected %q, want v2", got)
+	if got := pickWeightedDecision(domains, 0); got.Revision != "v1" {
+		t.Fatalf("draw 0 selected %q, want v1", got.Revision)
+	}
+	if got := pickWeightedDecision(domains, 0.9); got.Revision != "v2" {
+		t.Fatalf("draw 0.9 selected %q, want v2", got.Revision)
 	}
 }
 
@@ -472,10 +484,11 @@ func TestScreenerWeightedDistribution(t *testing.T) {
 }
 
 type decisionSyncer struct {
-	actual any
-	err    error
-	calls  int
-	ids    []string
+	actual     any
+	err        error
+	calls      int
+	ids        []string
+	candidates []any
 }
 
 func (s *decisionSyncer) TypedName() fwkplugin.TypedName {
@@ -490,10 +503,23 @@ func (s *decisionSyncer) Get(context.Context, fwkdl.StateKey, string, func([]any
 
 func (s *decisionSyncer) Delete(context.Context, fwkdl.StateKey, string) error { return nil }
 
-func (s *decisionSyncer) GetOrSet(_ context.Context, _ fwkdl.StateKey, id string, _ any) (any, bool, error) {
+func (s *decisionSyncer) GetOrSet(_ context.Context, _ fwkdl.StateKey, id string, candidate any) (any, bool, error) {
 	s.calls++
 	s.ids = append(s.ids, id)
+	s.candidates = append(s.candidates, candidate)
+	if s.actual == nil {
+		return candidate, false, s.err
+	}
 	return s.actual, true, s.err
+}
+
+func encodedDecision(t *testing.T, decision compatibilityDecision) string {
+	t.Helper()
+	encoded, err := json.Marshal(decision)
+	if err != nil {
+		t.Fatalf("marshal decision: %v", err)
+	}
+	return string(encoded)
 }
 
 func TestScreenerUsesSharedRevisionDecisionID(t *testing.T) {
@@ -502,7 +528,7 @@ func TestScreenerUsesSharedRevisionDecisionID(t *testing.T) {
 		"v1": {"prefill": 1, "decode": 1},
 		"v2": {"prefill": 1, "decode": 1},
 	})
-	syncer := &decisionSyncer{actual: "v2"}
+	syncer := &decisionSyncer{actual: encodedDecision(t, compatibilityDecision{Revision: "v2"})}
 	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
 		t.Fatal(err)
 	}
@@ -526,7 +552,7 @@ func TestScreenerUsesRequestIDWithoutRevisionDecisionID(t *testing.T) {
 		"v1": {"prefill": 1, "decode": 1},
 		"v2": {"prefill": 1, "decode": 1},
 	})
-	syncer := &decisionSyncer{actual: "v2"}
+	syncer := &decisionSyncer{actual: encodedDecision(t, compatibilityDecision{Revision: "v2"})}
 	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
 		t.Fatal(err)
 	}
@@ -583,10 +609,10 @@ func TestScreenerSharedRoutingDecisionFailureFailsClosed(t *testing.T) {
 	}
 }
 
-func TestScreenerStrictRevisionBypassesSharedRoutingDecision(t *testing.T) {
+func TestScreenerStrictRevisionCoordinatesSharedDecision(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
-	syncer := &decisionSyncer{err: errors.New("must not be called")}
+	syncer := &decisionSyncer{actual: encodedDecision(t, compatibilityDecision{Revision: "v1"})}
 	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
 		t.Fatal(err)
 	}
@@ -595,28 +621,33 @@ func TestScreenerStrictRevisionBypassesSharedRoutingDecision(t *testing.T) {
 		"x-disagg-revision":                   "v1",
 	}}
 	got := screenCandidates(t, screener, request, candidatePool(1, 0))
-	if len(got) != 1 || syncer.calls != 0 {
-		t.Fatalf("strict revision should bypass GetOrSet: endpoints=%v calls=%d", got, syncer.calls)
+	if len(got) != 1 || syncer.calls != 1 {
+		t.Fatalf("strict revision should coordinate through GetOrSet: endpoints=%v calls=%d", got, syncer.calls)
 	}
 }
 
-func TestScreenerStrictNonRevisionSelectorStillCoordinatesRevision(t *testing.T) {
+func TestScreenerStrictNonRevisionSelectorParticipatesInSharedDecision(t *testing.T) {
 	config := validConfig()
 	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
-		Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "disaggregatedset.x-k8s.io/slice", Mode: ModeStrict,
+		Name: "slice", HeaderName: "x-disagg-slice", LabelKey: testSliceLabel, Mode: ModeStrict,
 	})
 	screener := newTestScreener(config)
-	seedCounts(t, screener, map[string]map[string]int{
-		"v1": {"prefill": 1, "decode": 1},
-		"v2": {"prefill": 1, "decode": 1},
-	})
-	syncer := &decisionSyncer{actual: "v2"}
+	seedPods(t, screener,
+		readyPodWithLabels("v1-p", "v1", "prefill", map[string]string{testSliceLabel: "slice-a"}),
+		readyPodWithLabels("v1-d", "v1", "decode", map[string]string{testSliceLabel: "slice-a"}),
+		readyPodWithLabels("v2-p", "v2", "prefill", map[string]string{testSliceLabel: "slice-a"}),
+		readyPodWithLabels("v2-d", "v2", "decode", map[string]string{testSliceLabel: "slice-a"}),
+	)
+	syncer := &decisionSyncer{actual: encodedDecision(t, compatibilityDecision{
+		Revision: "v2",
+		Labels:   map[string]string{testSliceLabel: "slice-a"},
+	})}
 	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
 		t.Fatal(err)
 	}
 	candidates := candidatePool(1, 1)
 	for _, candidate := range candidates {
-		candidate.GetMetadata().Labels["disaggregatedset.x-k8s.io/slice"] = "slice-a"
+		candidate.GetMetadata().Labels[testSliceLabel] = "slice-a"
 	}
 	request := &fwksched.InferenceRequest{Headers: map[string]string{
 		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
@@ -624,7 +655,64 @@ func TestScreenerStrictNonRevisionSelectorStillCoordinatesRevision(t *testing.T)
 	}}
 	got := screenCandidates(t, screener, request, candidates)
 	if len(got) != 1 || got[0].GetMetadata().Labels[testRevLabel] != "v2" || syncer.calls != 1 {
-		t.Fatalf("slice selector bypassed revision coordination: endpoints=%v calls=%d", got, syncer.calls)
+		t.Fatalf("strict selector was not part of shared decision: endpoints=%v calls=%d", got, syncer.calls)
+	}
+}
+
+func TestScreenerChoosesAndRemembersGenericStrictDecision(t *testing.T) {
+	const topologyLabel = "example.ai/topology"
+	config := validConfig()
+	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
+		Name: "topology", HeaderName: "x-topology", LabelKey: topologyLabel, Mode: ModeStrict,
+	})
+	screener := newTestScreener(config)
+	seedPods(t, screener,
+		readyPodWithLabels("v1-p", "v1", "prefill", map[string]string{topologyLabel: "domain-a"}),
+		readyPodWithLabels("v1-d", "v1", "decode", map[string]string{topologyLabel: "domain-a"}),
+		readyPodWithLabels("v2-p", "v2", "prefill", map[string]string{topologyLabel: "domain-b"}),
+		readyPodWithLabels("v2-d", "v2", "decode", map[string]string{topologyLabel: "domain-b"}),
+	)
+
+	v1 := endpoint("v1", map[string]string{testRevLabel: "v1", topologyLabel: "domain-a"})
+	v2 := endpoint("v2", map[string]string{testRevLabel: "v2", topologyLabel: "domain-b"})
+	request := &fwksched.InferenceRequest{Headers: map[string]string{
+		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
+	}}
+
+	// Only v1 is eligible for the first request, so it establishes the full
+	// (revision, topology) decision without relying on a special slice path.
+	first := screenCandidates(t, screener, request, []fwksched.Endpoint{v1})
+	if len(first) != 1 || first[0].GetMetadata().Name != "v1" {
+		t.Fatalf("initial strict decision = %v, want v1", first)
+	}
+	second := screenCandidates(t, screener, request, []fwksched.Endpoint{v1, v2})
+	if len(second) != 1 || second[0].GetMetadata().Name != "v1" {
+		t.Fatalf("strict decision was not remembered: %v", second)
+	}
+}
+
+func TestScreenerStrictHeaderConstrainsGenericDecision(t *testing.T) {
+	const topologyLabel = "example.ai/topology"
+	config := validConfig()
+	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
+		Name: "topology", HeaderName: "x-topology", LabelKey: topologyLabel, Mode: ModeStrict,
+	})
+	screener := newTestScreener(config)
+	seedPods(t, screener,
+		readyPodWithLabels("v1-p", "v1", "prefill", map[string]string{topologyLabel: "domain-a"}),
+		readyPodWithLabels("v1-d", "v1", "decode", map[string]string{topologyLabel: "domain-a"}),
+		readyPodWithLabels("v2-p", "v2", "prefill", map[string]string{topologyLabel: "domain-b"}),
+		readyPodWithLabels("v2-d", "v2", "decode", map[string]string{topologyLabel: "domain-b"}),
+	)
+
+	candidates := []fwksched.Endpoint{
+		endpoint("v1", map[string]string{testRevLabel: "v1", topologyLabel: "domain-a"}),
+		endpoint("v2", map[string]string{testRevLabel: "v2", topologyLabel: "domain-b"}),
+	}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-topology": "domain-b"}}
+	got := screenCandidates(t, screener, request, candidates)
+	if len(got) != 1 || got[0].GetMetadata().Name != "v2" {
+		t.Fatalf("strict header did not constrain the full decision: %v", got)
 	}
 }
 

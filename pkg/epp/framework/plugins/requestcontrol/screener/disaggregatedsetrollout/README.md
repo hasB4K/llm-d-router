@@ -97,49 +97,54 @@ request. Once both revisions are covered, decode is the globally largest role.
 
 ## Request Lifecycle
 
-For every Pod notification, the plugin caches the Ready Pod count by revision
-and role. For a request without a strict revision header, it then:
+For every Pod notification, the plugin caches the Ready Pod count for each
+complete compatibility decision: the revision plus the values of every strict,
+non-revision header selector. For a request, it then:
 
-1. Removes every revision that has no Ready Pod for any required role, because
-   a revision missing one role cannot serve the request.
-2. Computes a weight for each remaining revision.
-3. Randomly chooses one candidate revision using those weights.
-4. When the request carries `x-llm-d-revision-decision-id`, or falls back to
-   `x-request-id`, atomically stores or reads the revision decision through the
+1. Removes every decision missing a Ready Pod for any required role.
+2. Applies any supplied strict headers as constraints on the decision.
+3. Computes a weight for each remaining decision.
+4. Randomly chooses one complete decision using those weights.
+5. When the request carries `x-llm-d-revision-decision-id`, or falls back to
+   `x-request-id`, atomically stores or reads the complete decision through the
    configured `CrossReplicaSyncer`. Without one, it stores the decision in the
    local EPP process.
-5. Exposes only the resulting revision's endpoints to all scheduling profiles.
-6. Stamps the selected endpoint's revision into the configured response header.
+6. Exposes only endpoints matching that decision to all scheduling profiles.
+7. Stamps configured labels from the selected endpoint into response headers.
 
 ```text
 Ready Pod counts
        |
        v
-remove incomplete revisions -> choose one covered revision
+remove incomplete decisions -> choose one covered decision
        |                               |
        +-------------------------------+
                                        v
                         filters, scorers, and picker
                                        |
                                        v
-                         stamp the selected revision
+                        stamp the selected labels
 ```
 
-When a strict revision header is already present, the plugin does not make a
-new weighted choice. It checks that the requested revision has all required
-roles and keeps only endpoints with that revision.
+For example, with a strict revision selector and a strict slice selector, the
+decision is `(revision, slice)`. A revision header fixes only the revision; the
+Screener still selects a covered slice. A slice header fixes only the slice;
+the Screener still selects a covered revision. When both are supplied, the
+decision is fully constrained. The same mechanism works for any strict label;
+there is no slice-specific code path.
 
 ### Two EPPs
 
-Separate phase EPPs must make the same revision decision even though each one
+Separate phase EPPs must make the same compatibility decision even though each one
 schedules independently. The coordinator generates one
 `x-llm-d-revision-decision-id` for the request and sends it to every encode,
 prefill, and decode EPP request.
 
-Each Screener can propose a covered revision, but atomic `GetOrSet` makes the
-first stored revision authoritative. In E/P/D, parallel encode requests can
+Each Screener can propose a covered decision, but atomic `GetOrSet` makes the
+first stored decision authoritative. In E/P/D, parallel encode requests can
 therefore begin together without waiting for one encode response. Prefill and
-decode use the same decision ID and receive the same revision.
+decode use the same decision ID and receive the same revision and strict-label
+values.
 
 With a configured `CrossReplicaSyncer`, this coordination works when requests
 are distributed across multiple EPP replicas. Without one, the Screener stores
@@ -149,10 +154,15 @@ the pool.
 ### One EPP
 
 The Screener runs once before the disaggregated scheduling profiles. Choosing
-one revision up front gives the decode and prefill profiles the same restricted
-candidate set, so they cannot independently select different revisions.
+one compatibility decision up front gives the decode and prefill profiles the
+same restricted candidate set, so they cannot independently select different
+revisions or strict-label values.
 
 ## Revision Gating Modes
+
+The modes weight complete compatibility decisions. When no non-revision strict
+selector is configured, a decision is simply one revision, so the examples
+below are unchanged.
 
 ### `max-role`
 
@@ -229,7 +239,7 @@ the profiles of a single EPP, on one revision.
 
 | Mode | Behavior |
 |---|---|
-| `strict` | Keeps only endpoints whose label equals the request header. No match fails closed. |
+| `strict` | With revision gating, selects this label as part of the complete shared decision when the header is absent; a supplied value constrains it. The label must have the same value on every required role. With gating disabled, it only filters an incoming header. |
 | `prefer` | Stamps the selected label without screening candidates. Configure a [`header-label-affinity-scorer`](../../../scheduling/scorer/headerlabelaffinity/README.md) to apply the soft preference. |
 
 Every selector also stamps its configured response header from the endpoint
@@ -288,7 +298,7 @@ request. Do not add it to a scheduling profile.
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `scope.labelSelector` | string | Yes | | Selects the Pods observed for cross-role revision coverage. |
-| `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening and response-header stamping. |
+| `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict compatibility decisions and response-header stamping. |
 | `revisionGating` | object | Yes | | Revision screening configuration. Use `mode: disabled` to retain selectors and response-header stamping without revision coverage or weighted selection. |
 | `revisionGating.mode` | string | Yes | | `sum`, `max-role`, or `disabled`. |
 | `revisionGating.requireRoles.values` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. |
@@ -301,8 +311,8 @@ Each `headerSelectors` entry has:
 |---|---|---|
 | `name` | string | Stable selector identifier, used as a metric label for strict selectors. |
 | `headerName` | string | Request and response header carrying the selected label value. |
-| `labelKey` | string | Kubernetes Pod label whose value is compared with the request header and copied from the selected endpoint into the response header. |
-| `mode` | string | `strict` screens candidates globally; `prefer` only stamps the selected value and leaves scoring to a separate plugin. |
+| `labelKey` | string | Kubernetes Pod label whose value is compared with the request header and copied from the selected endpoint into the response header. A strict label is also part of the shared decision when gating is active, so it must have the same value across every required role. |
+| `mode` | string | `strict` is a hard shared compatibility dimension when gating is active; `prefer` only stamps the selected value and leaves scoring to a separate plugin. |
 
 ## DisaggregatedSet Slice Affinity
 
