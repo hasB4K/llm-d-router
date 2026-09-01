@@ -55,7 +55,7 @@ type Screener struct {
 	revisionLabelKey         string
 	roleLabelKey             string
 	revisionDecisionStateKey fwkdl.StateKey
-	syncer                   fwkdl.CrossReplicaSyncer
+	handle                   fwkplugin.Handle
 	localRevisionDecisions   localGetOrSet
 
 	mu           sync.RWMutex
@@ -74,16 +74,15 @@ type revisionDistribution struct {
 }
 
 var (
-	_ fwkplugin.Plugin                 = (*Screener)(nil)
-	_ fwkrc.Screener                   = (*Screener)(nil)
-	_ fwkrc.ResponseHeaderProcessor    = (*Screener)(nil)
-	_ fwkdl.Registrant                 = (*Screener)(nil)
-	_ fwkdl.CrossReplicaSyncerConsumer = (*Screener)(nil)
-	_ fwkdl.NotificationExtractor      = (*podNotificationHandler)(nil)
+	_ fwkplugin.Plugin              = (*Screener)(nil)
+	_ fwkrc.Screener                = (*Screener)(nil)
+	_ fwkrc.ResponseHeaderProcessor = (*Screener)(nil)
+	_ fwkdl.Registrant              = (*Screener)(nil)
+	_ fwkdl.NotificationExtractor   = (*podNotificationHandler)(nil)
 )
 
 // Factory creates a disaggregatedset-rollout-screener from normal plugin parameters.
-func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplugin.Plugin, error) {
+func Factory(name string, parameters *json.Decoder, handle fwkplugin.Handle) (fwkplugin.Plugin, error) {
 	if name == "" {
 		name = PluginType
 	}
@@ -102,10 +101,10 @@ func Factory(name string, parameters *json.Decoder, _ fwkplugin.Handle) (fwkplug
 		return nil, fmt.Errorf("parse scope.labelSelector: %w", err)
 	}
 	registerMetrics()
-	return newScreener(name, config, scope), nil
+	return newScreener(name, config, scope, handle), nil
 }
 
-func newScreener(name string, config Config, scope labels.Selector) *Screener {
+func newScreener(name string, config Config, scope labels.Selector, handle fwkplugin.Handle) *Screener {
 	revisionLabelKey := ""
 	roleLabelKey := ""
 	if config.RevisionGating != nil {
@@ -119,20 +118,12 @@ func newScreener(name string, config Config, scope labels.Selector) *Screener {
 		revisionLabelKey:         revisionLabelKey,
 		roleLabelKey:             roleLabelKey,
 		revisionDecisionStateKey: fwkdl.StateKey("disaggregatedset-rollout:" + name),
+		handle:                   handle,
 		pods:                     make(map[types.NamespacedName]podInfo),
 	}
 }
 
 func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
-
-// SetCrossReplicaSyncer configures cross-replica revision coordination.
-func (c *Screener) SetCrossReplicaSyncer(syncer fwkdl.CrossReplicaSyncer) error {
-	if syncer == nil {
-		return errors.New("cross-replica syncer must not be nil")
-	}
-	c.syncer = syncer
-	return nil
-}
 
 // RegisterDependencies requests the framework-owned core/v1 Pod notification
 // source. No controller-runtime Manager or Kubernetes client enters the plugin.

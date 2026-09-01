@@ -74,7 +74,7 @@ func newTestScreener(config Config) *Screener {
 	if err != nil {
 		panic(err)
 	}
-	return newScreener("test-screener", config, scope)
+	return newScreener("test-screener", config, scope, fwkplugin.NewEppHandle(context.Background(), nil))
 }
 
 func endpoint(name string, endpointLabels map[string]string) fwksched.Endpoint {
@@ -135,12 +135,16 @@ func TestScreenerFactoryAndPodDependency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := Factory("rollout-screener", fwkplugin.StrictDecoder(raw), nil)
+	handle := fwkplugin.NewEppHandle(context.Background(), nil)
+	plugin, err := Factory("rollout-screener", fwkplugin.StrictDecoder(raw), handle)
 	if err != nil {
 		t.Fatalf("Factory: %v", err)
 	}
 	screener := plugin.(*Screener)
 	var _ fwkrc.Screener = screener
+	if screener.handle != handle {
+		t.Fatal("screener did not retain its framework handle")
+	}
 	if screener.TypedName() != (fwkplugin.TypedName{Type: PluginType, Name: "rollout-screener"}) {
 		t.Fatalf("unexpected typed name: %v", screener.TypedName())
 	}
@@ -503,9 +507,7 @@ func TestScreenerUsesSharedRevisionDecisionID(t *testing.T) {
 		"v2": {"prefill": 1, "decode": 1},
 	})
 	syncer := &decisionSyncer{actual: "v2"}
-	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
-		t.Fatal(err)
-	}
+	screener.handle.SetCrossReplicaSyncer(syncer)
 
 	request := &fwksched.InferenceRequest{Headers: map[string]string{
 		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
@@ -527,9 +529,7 @@ func TestScreenerUsesRequestIDWithoutRevisionDecisionID(t *testing.T) {
 		"v2": {"prefill": 1, "decode": 1},
 	})
 	syncer := &decisionSyncer{actual: "v2"}
-	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
-		t.Fatal(err)
-	}
+	screener.handle.SetCrossReplicaSyncer(syncer)
 
 	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RequestIDHeaderKey: "request-id"}}
 	got := screenCandidates(t, screener, request, candidatePool(1, 1))
@@ -544,9 +544,7 @@ func TestScreenerUsesRequestIDWithoutRevisionDecisionID(t *testing.T) {
 func TestScreenerRejectsNonStringRevisionDecision(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
-	if err := screener.SetCrossReplicaSyncer(&decisionSyncer{actual: 1}); err != nil {
-		t.Fatal(err)
-	}
+	screener.handle.SetCrossReplicaSyncer(&decisionSyncer{actual: 1})
 
 	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RevisionDecisionIDHeaderKey: "decision-id"}}
 	if got := screenCandidates(t, screener, request, candidatePool(1, 0)); len(got) != 0 {
@@ -574,9 +572,7 @@ func TestScreenerLocalRoutingDecisionIsStable(t *testing.T) {
 func TestScreenerSharedRoutingDecisionFailureFailsClosed(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
-	if err := screener.SetCrossReplicaSyncer(&decisionSyncer{err: errors.New("store unavailable")}); err != nil {
-		t.Fatal(err)
-	}
+	screener.handle.SetCrossReplicaSyncer(&decisionSyncer{err: errors.New("store unavailable")})
 	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RevisionDecisionIDHeaderKey: "decision-id"}}
 	if got := screenCandidates(t, screener, request, candidatePool(1, 0)); len(got) != 0 {
 		t.Fatalf("sync failure must fail closed, got %v", got)
@@ -587,9 +583,7 @@ func TestScreenerStrictRevisionBypassesSharedRoutingDecision(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
 	syncer := &decisionSyncer{err: errors.New("must not be called")}
-	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
-		t.Fatal(err)
-	}
+	screener.handle.SetCrossReplicaSyncer(syncer)
 	request := &fwksched.InferenceRequest{Headers: map[string]string{
 		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
 		"x-disagg-revision":                   "v1",
@@ -611,9 +605,7 @@ func TestScreenerStrictNonRevisionSelectorStillCoordinatesRevision(t *testing.T)
 		"v2": {"prefill": 1, "decode": 1},
 	})
 	syncer := &decisionSyncer{actual: "v2"}
-	if err := screener.SetCrossReplicaSyncer(syncer); err != nil {
-		t.Fatal(err)
-	}
+	screener.handle.SetCrossReplicaSyncer(syncer)
 	candidates := candidatePool(1, 1)
 	for _, candidate := range candidates {
 		candidate.GetMetadata().Labels["disaggregatedset.x-k8s.io/slice"] = "slice-a"

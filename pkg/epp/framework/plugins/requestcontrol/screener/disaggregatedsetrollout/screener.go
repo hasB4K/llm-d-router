@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
+	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
@@ -86,12 +87,13 @@ func revisionDecisionID(request *fwksched.InferenceRequest) string {
 }
 
 func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (string, error) {
-	if c.syncer == nil {
+	syncer := c.crossReplicaSyncer()
+	if syncer == nil {
 		revision, _ := c.localRevisionDecisions.GetOrSet(id, candidate)
 		return revision, nil
 	}
 
-	actual, _, err := c.syncer.GetOrSet(ctx, c.revisionDecisionStateKey, id, candidate)
+	actual, _, err := syncer.GetOrSet(ctx, c.revisionDecisionStateKey, id, candidate)
 	if err != nil {
 		return "", err
 	}
@@ -100,6 +102,14 @@ func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (
 		return "", errInvalidSharedRevision
 	}
 	return revision, nil
+}
+
+func (c *Screener) crossReplicaSyncer() fwkdl.CrossReplicaSyncer {
+	if c.handle == nil {
+		return nil
+	}
+	syncer, _ := c.handle.CrossReplicaSyncer().(fwkdl.CrossReplicaSyncer)
+	return syncer
 }
 
 func (c *Screener) applyRevisionDecision(
