@@ -19,9 +19,11 @@ limitations under the License.
 //
 // Two mechanisms shape the survivor set the scheduler picker sees:
 //
-//   - Header selectors: strict mode screens the candidate pool to endpoints
-//     whose label matches the request header. Prefer-mode selectors are
-//     consumed by the separate DisaggregatedSet preference scorer.
+//   - Header selectors: every strict selector participates in the complete
+//     compatibility decision while revision gating is active. A supplied
+//     header constrains its value; otherwise the Screener selects one value
+//     together with the revision. Prefer-mode selectors are consumed by the
+//     separate DisaggregatedSet preference scorer.
 //
 //   - Revision gating: a request-independent safety+load-shaping layer
 //     that (a) drops revisions missing Ready pods on any required role
@@ -63,9 +65,11 @@ type Scope struct {
 	LabelSelector string `json:"labelSelector"`
 }
 
-// HeaderSelector defines one header/label pair to select and stamp. Strict
-// selectors are consumed by the Screener; prefer selectors are stamped but
-// require a separately configured affinity scorer. ResponseHeader stamps both.
+// HeaderSelector defines one header/label pair to select and stamp. When
+// revision gating is active, every strict selector is one dimension of the
+// shared compatibility decision and its label must have the same value on Pods
+// for all required roles. Prefer selectors are stamped but require a separately
+// configured affinity scorer. ResponseHeader stamps both.
 type HeaderSelector struct {
 	Name       string       `json:"name"`
 	HeaderName string       `json:"headerName"`
@@ -94,10 +98,10 @@ func (s *HeaderSelector) UnmarshalJSON(data []byte) error {
 type SelectorMode string
 
 const (
-	// ModeStrict: no match produces an empty candidate set, so the framework's downstream
-	// pipeline returns an error (503). Intentional under strict mode:
-	// the client asked for something specific and we do not silently
-	// substitute.
+	// ModeStrict is a hard compatibility dimension. A supplied request header
+	// constrains that dimension; otherwise revision gating selects its value as
+	// part of the complete shared decision. No matching complete decision fails
+	// closed.
 	ModeStrict SelectorMode = "strict"
 	// ModePrefer leaves matching to a separately configured soft-affinity
 	// scorer. The Screener only stamps this selector's response header.
@@ -109,8 +113,9 @@ const (
 //
 //  1. Coverage check: drop candidates whose revision has zero Ready pods
 //     for any role listed in RequireRoles.Values.
-//  2. Load shaping: when no strict header is present, weighted-random-pick
-//     ONE surviving revision and keep only its pods.
+//  2. Load shaping: weighted-random-pick ONE complete decision, comprising a
+//     revision and all strict non-revision selector values, then keep only its
+//     pods. Supplied strict headers constrain the candidate decisions.
 //
 // RevisionLabelKey and RoleLabelKey are independent of HeaderSelectors.
 // gating can operate even with no header selectors, and header selectors

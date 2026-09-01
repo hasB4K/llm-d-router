@@ -73,8 +73,8 @@ func recordStrictHeaderNoMatch(pluginName, selectorName string) {
 func recordRevisionGatingShares(
 	pluginName string,
 	mode GatingMode,
-	previous revisionDistribution,
-	current revisionDistribution,
+	previous compatibilityDistribution,
+	current compatibilityDistribution,
 ) {
 	for revision := range previous.roleCounts {
 		if _, exists := current.roleCounts[revision]; !exists {
