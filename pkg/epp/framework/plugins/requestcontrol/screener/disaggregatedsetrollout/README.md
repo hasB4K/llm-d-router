@@ -312,6 +312,13 @@ within one NVL72 NVLink domain. Preferring the same slice can avoid a slower
 cross-domain KV-cache transfer while retaining fallback capacity when that
 slice is unavailable or overloaded.
 
+Strict revision selection is supported for both P/D and E/P/D because the
+shared revision decision is coordinated independently of phase response order.
+Strict slice selection is supported for P/D, where a forwarded prefill slice
+can constrain decode, but it does not provide an end-to-end slice guarantee for
+E/P/D. Slice selection should normally use `prefer` so KV-cache and load-aware
+scoring can select another slice when it is a better candidate.
+
 The scorer weight represents how preferable the same NVL72 domain is relative
 to the other scorers in the profile. Benchmark same-slice and cross-slice KV
 transfers with representative traffic. Choose a weight that normally avoids a
