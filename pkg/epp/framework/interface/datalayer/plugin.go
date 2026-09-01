@@ -65,15 +65,6 @@ type NotificationExtractor interface {
 	GVK() schema.GroupVersionKind
 }
 
-// NotificationSnapshotExtractor optionally receives a complete initial
-// snapshot after the framework has synchronized the source's Kubernetes cache.
-// InitialSnapshot is called once, including when the snapshot is empty, before
-// normal notifications are delivered to the extractor.
-type NotificationSnapshotExtractor interface {
-	NotificationExtractor
-	InitialSnapshot(ctx context.Context, events []NotificationEvent) error
-}
-
 // PollingDispatcher is the framework's contract for polling sources. The
 // source owns its extractors and runs them with typed input each tick.
 //

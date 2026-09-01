@@ -18,101 +18,117 @@ package datalayer
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	extractormocks "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/extractor/mocks"
 	sourcenotifications "github.com/llm-d/llm-d-router/pkg/epp/framework/plugins/datalayer/source/notifications"
 )
 
-type snapshotCaptureExtractor struct {
-	*extractormocks.NotificationExtractor
-	snapshots [][]fwkdl.NotificationEvent
+type testSyncingSource struct {
+	waitErr error
 }
 
-func (e *snapshotCaptureExtractor) InitialSnapshot(_ context.Context, events []fwkdl.NotificationEvent) error {
-	snapshot := make([]fwkdl.NotificationEvent, len(events))
-	copy(snapshot, events)
-	e.snapshots = append(e.snapshots, snapshot)
+func (*testSyncingSource) Start(context.Context, workqueue.TypedRateLimitingInterface[reconcile.Request]) error {
 	return nil
 }
 
-func TestNotificationReconcilerInitialSnapshot(t *testing.T) {
-	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
-	scheme := runtime.NewScheme()
-	if err := corev1.AddToScheme(scheme); err != nil {
-		t.Fatal(err)
+func (s *testSyncingSource) WaitForSync(context.Context) error {
+	return s.waitErr
+}
+
+func TestNotificationInitialSync(t *testing.T) {
+	initialSync := newNotificationInitialSync("pods")
+	first := types.NamespacedName{Namespace: "default", Name: "first"}
+	second := types.NamespacedName{Namespace: "default", Name: "second"}
+	initialSync.processed.Start(first)
+	initialSync.processed.Start(second)
+
+	wrapped := &notificationInitialSyncSource{
+		SyncingSource: &testSyncingSource{},
+		initialSync:   initialSync,
 	}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "default"}},
-		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-b", Namespace: "default"}},
-	).Build()
-	snapshotter := &snapshotCaptureExtractor{
-		NotificationExtractor: extractormocks.NewNotificationExtractor("snapshot"),
+	if err := wrapped.WaitForSync(context.Background()); err != nil {
+		t.Fatalf("WaitForSync: %v", err)
 	}
-	regular := extractormocks.NewNotificationExtractor("regular")
-	reconciler := &notificationReconciler{
-		client:              client,
-		src:                 sourcenotifications.NewK8sNotificationSource(sourcenotifications.NotificationSourceType, "pods", gvk),
-		extractors:          []fwkdl.NotificationExtractor{snapshotter, regular},
-		snapshotExtractors:  []fwkdl.NotificationSnapshotExtractor{snapshotter},
-		initialSnapshotDone: make(chan struct{}),
-		gvk:                 gvk,
-		log:                 logr.Discard(),
+	if initialSync.hasSynced() {
+		t.Fatal("initial sync completed before queued keys were processed")
 	}
 
-	if err := reconciler.takeInitialSnapshot(context.Background()); err != nil {
-		t.Fatalf("takeInitialSnapshot: %v", err)
+	initialSync.processed.Finished(first)
+	if initialSync.hasSynced() {
+		t.Fatal("initial sync completed before every queued key was processed")
 	}
-	select {
-	case <-reconciler.initialSnapshotDone:
-	default:
-		t.Fatal("initial snapshot completion was not signaled")
-	}
-	if len(snapshotter.snapshots) != 1 {
-		t.Fatalf("got %d snapshots, want 1", len(snapshotter.snapshots))
-	}
-	got := snapshotter.snapshots[0]
-	if len(got) != 2 {
-		t.Fatalf("got %d snapshot events, want 2", len(got))
-	}
-	for _, event := range got {
-		if event.Type != fwkdl.EventAddOrUpdate {
-			t.Fatalf("snapshot event type = %v, want add or update", event.Type)
-		}
-		if event.Object == nil || event.Object.GroupVersionKind() != gvk {
-			t.Fatalf("snapshot event has unexpected object: %#v", event.Object)
-		}
-	}
-	if got := regular.GetEvents(); len(got) != 0 {
-		t.Fatalf("regular extractor received initial snapshot events: %#v", got)
+
+	initialSync.processed.Finished(second)
+	if !initialSync.hasSynced() {
+		t.Fatal("initial sync did not complete after every queued key was processed")
 	}
 }
 
-func TestNotificationReconcilerWaitForInitialSnapshot(t *testing.T) {
-	reconciler := &notificationReconciler{initialSnapshotDone: make(chan struct{})}
-	result := make(chan error, 1)
-	started := make(chan struct{})
-	go func() {
-		close(started)
-		result <- reconciler.waitForInitialSnapshot(context.Background())
-	}()
-	<-started
-	select {
-	case err := <-result:
-		t.Fatalf("waitForInitialSnapshot returned before completion: %v", err)
-	default:
+func TestNotificationInitialSyncWaitError(t *testing.T) {
+	wantErr := errors.New("sync failed")
+	initialSync := newNotificationInitialSync("pods")
+	wrapped := &notificationInitialSyncSource{
+		SyncingSource: &testSyncingSource{waitErr: wantErr},
+		initialSync:   initialSync,
+	}
+	if err := wrapped.WaitForSync(context.Background()); !errors.Is(err, wantErr) {
+		t.Fatalf("WaitForSync() error = %v, want %v", err, wantErr)
+	}
+	if initialSync.hasSynced() {
+		t.Fatal("initial sync completed after the upstream source failed to sync")
+	}
+}
+
+func TestRuntimeNotificationReadiness(t *testing.T) {
+	runtime := NewRuntime(time.Second)
+	if err := runtime.CheckReady(); err != nil {
+		t.Fatalf("CheckReady() without notification sources: %v", err)
 	}
 
-	close(reconciler.initialSnapshotDone)
-	if err := <-result; err != nil {
-		t.Fatalf("waitForInitialSnapshot: %v", err)
+	initialSync := newNotificationInitialSync("pods")
+	runtime.notificationSyncs = []*notificationInitialSync{initialSync}
+	if err := runtime.CheckReady(); err == nil || !strings.Contains(err.Error(), "pods") {
+		t.Fatalf("CheckReady() error = %v, want pending source name", err)
+	}
+
+	initialSync.upstreamSynced.Store(true)
+	if err := runtime.CheckReady(); err != nil {
+		t.Fatalf("CheckReady() after an empty initial list: %v", err)
+	}
+}
+
+func TestNotificationDispatchReturnsExtractorErrors(t *testing.T) {
+	wantErr := errors.New("extract failed")
+	gvk := schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"}
+	failing := extractormocks.NewNotificationExtractor("failing").WithExtractError(wantErr)
+	working := extractormocks.NewNotificationExtractor("working")
+	reconciler := &notificationReconciler{
+		src: sourcenotifications.NewK8sNotificationSource(
+			sourcenotifications.NotificationSourceType,
+			"pods",
+			gvk,
+		),
+		extractors: []fwkdl.NotificationExtractor{failing, working},
+		log:        logr.Discard(),
+	}
+	event := &fwkdl.NotificationEvent{Object: &unstructured.Unstructured{}}
+
+	if err := reconciler.dispatch(context.Background(), logr.Discard(), event); !errors.Is(err, wantErr) {
+		t.Fatalf("dispatch() error = %v, want %v", err, wantErr)
+	}
+	if got := len(working.GetEvents()); got != 1 {
+		t.Fatalf("working extractor received %d events, want 1", got)
 	}
 }

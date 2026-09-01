@@ -18,17 +18,25 @@ package datalayer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/cache/synctrack"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/llm-d/llm-d-router/pkg/common/observability/logging"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
@@ -38,30 +46,46 @@ import (
 // The framework core owns the cache and reconciliation; the source only receives
 // deep-copied events via Notify.
 func BindNotificationSource(src fwkdl.NotificationSource, extractors []fwkdl.NotificationExtractor, mgr ctrl.Manager) error {
+	_, err := bindNotificationSource(src, extractors, mgr)
+	return err
+}
+
+func bindNotificationSource(src fwkdl.NotificationSource, extractors []fwkdl.NotificationExtractor, mgr ctrl.Manager) (*notificationInitialSync, error) {
 	gvk := src.GVK()
 	log := mgr.GetLogger().WithName("notification-controller").WithValues("gvk", gvk.Kind)
+	initialSync := newNotificationInitialSync(src.TypedName().String())
 
 	reconciler := &notificationReconciler{
-		client:     mgr.GetClient(),
-		src:        src,
-		extractors: extractors,
-		gvk:        gvk,
-		log:        log,
-	}
-	for _, extractor := range extractors {
-		if snapshotter, ok := extractor.(fwkdl.NotificationSnapshotExtractor); ok {
-			reconciler.snapshotExtractors = append(reconciler.snapshotExtractors, snapshotter)
-		}
-	}
-	if len(reconciler.snapshotExtractors) > 0 {
-		reconciler.initialSnapshotDone = make(chan struct{})
-		if err := mgr.Add(&notificationInitialSnapshotRunnable{reconciler: reconciler}); err != nil {
-			return fmt.Errorf("register initial snapshot for notification source %s: %w", src.TypedName(), err)
-		}
+		client:      mgr.GetClient(),
+		src:         src,
+		extractors:  extractors,
+		initialSync: initialSync,
+		gvk:         gvk,
+		log:         log,
 	}
 
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
+	// Kind.WaitForSync completes after its handler has enqueued the initial
+	// list. Track those keys through successful notification dispatch.
+	enqueue := &handler.TypedEnqueueRequestForObject[*unstructured.Unstructured]{}
+	eventHandler := handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
+		CreateFunc: func(ctx context.Context, event event.TypedCreateEvent[*unstructured.Unstructured], queue workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			if event.IsInInitialList && event.Object != nil {
+				initialSync.processed.Start(client.ObjectKeyFromObject(event.Object))
+			}
+			enqueue.Create(ctx, event, queue)
+		},
+		UpdateFunc:  enqueue.Update,
+		DeleteFunc:  enqueue.Delete,
+		GenericFunc: enqueue.Generic,
+	}
+	kindSource := source.Kind(
+		mgr.GetCache(),
+		obj,
+		eventHandler,
+		predicate.TypedResourceVersionChangedPredicate[*unstructured.Unstructured]{},
+	)
 
 	// use the source's name to make the controller name unique
 	// This allows multiple notification sources for the same GVK
@@ -69,45 +93,61 @@ func BindNotificationSource(src fwkdl.NotificationSource, extractors []fwkdl.Not
 	// one source per GVK).
 	controllerName := "notify_" + strings.ToLower(gvk.Kind) + "_" + src.TypedName().Name
 
-	return ctrl.NewControllerManagedBy(mgr).
+	err := ctrl.NewControllerManagedBy(mgr).
 		// Naming the controller allows you to see specific metrics/logs for this watch
 		Named(controllerName).
-		For(obj).
-		// ResourceVersionChanged is safer for generic notifications than GenerationChanged,
-		// as it catches metadata and status updates that the consumer might need.
-		WithEventFilter(predicate.ResourceVersionChangedPredicate{}).
+		WatchesRawSource(&notificationInitialSyncSource{
+			SyncingSource: kindSource,
+			initialSync:   initialSync,
+		}).
 		Complete(reconciler)
+	if err != nil {
+		return nil, err
+	}
+	return initialSync, nil
 }
 
 // Reconciler for notifications. This is a generic reconciler that can be used for any GVK.
 type notificationReconciler struct {
-	client              client.Client
-	src                 fwkdl.NotificationSource
-	extractors          []fwkdl.NotificationExtractor
-	snapshotExtractors  []fwkdl.NotificationSnapshotExtractor
-	initialSnapshotDone chan struct{}
-	gvk                 schema.GroupVersionKind
-	log                 logr.Logger
+	client      client.Client
+	src         fwkdl.NotificationSource
+	extractors  []fwkdl.NotificationExtractor
+	initialSync *notificationInitialSync
+	gvk         schema.GroupVersionKind
+	log         logr.Logger
 }
 
-type notificationInitialSnapshotRunnable struct {
-	reconciler *notificationReconciler
+type notificationInitialSync struct {
+	upstreamSynced atomic.Bool
+	processed      synctrack.AsyncTracker[types.NamespacedName]
+	sourceName     string
 }
 
-var _ manager.LeaderElectionRunnable = (*notificationInitialSnapshotRunnable)(nil)
+func newNotificationInitialSync(sourceName string) *notificationInitialSync {
+	initialSync := &notificationInitialSync{sourceName: sourceName}
+	initialSync.processed.UpstreamHasSynced = initialSync.upstreamSynced.Load
+	return initialSync
+}
 
-func (*notificationInitialSnapshotRunnable) NeedLeaderElection() bool { return false }
+func (s *notificationInitialSync) hasSynced() bool {
+	return s.processed.HasSynced()
+}
 
-func (r *notificationInitialSnapshotRunnable) Start(ctx context.Context) error {
-	return r.reconciler.takeInitialSnapshot(ctx)
+type notificationInitialSyncSource struct {
+	source.SyncingSource
+	initialSync *notificationInitialSync
+}
+
+func (s *notificationInitialSyncSource) WaitForSync(ctx context.Context) error {
+	if err := s.SyncingSource.WaitForSync(ctx); err != nil {
+		return err
+	}
+	s.initialSync.upstreamSynced.Store(true)
+	return nil
 }
 
 // Reconciler carries out the actual notification logic.
 func (rn *notificationReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	if err := rn.waitForInitialSnapshot(ctx); err != nil {
-		return ctrl.Result{}, err
-	}
-
 	log := rn.log.WithValues("resource", req.NamespacedName, "gvk", rn.gvk.String())
 
 	u := &unstructured.Unstructured{}
@@ -130,74 +170,32 @@ func (rn *notificationReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 	}
 
-	return rn.dispatch(ctx, log, event)
+	err = rn.dispatch(ctx, log, event)
+	if err == nil {
+		rn.initialSync.processed.Finished(req.NamespacedName)
+	}
+	return ctrl.Result{}, err
 }
 
-func (rn *notificationReconciler) waitForInitialSnapshot(ctx context.Context) error {
-	if rn.initialSnapshotDone == nil {
-		return nil
-	}
-	select {
-	case <-rn.initialSnapshotDone:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (rn *notificationReconciler) takeInitialSnapshot(ctx context.Context) error {
-	if rn.initialSnapshotDone == nil {
-		return nil
-	}
-
-	objects := &unstructured.UnstructuredList{}
-	objects.SetGroupVersionKind(rn.gvk.GroupVersion().WithKind(rn.gvk.Kind + "List"))
-	if err := rn.client.List(ctx, objects); err != nil {
-		return fmt.Errorf("list initial %s snapshot: %w", rn.gvk, err)
-	}
-
-	events := make([]fwkdl.NotificationEvent, 0, len(objects.Items))
-	for i := range objects.Items {
-		object := objects.Items[i].DeepCopy()
-		object.SetGroupVersionKind(rn.gvk)
-		processed, err := rn.src.Notify(ctx, fwkdl.NotificationEvent{
-			Type:   fwkdl.EventAddOrUpdate,
-			Object: object,
-		})
-		if err != nil {
-			return fmt.Errorf("process initial %s snapshot item: %w", rn.gvk, err)
-		}
-		if processed != nil {
-			events = append(events, *processed)
-		}
-	}
-
-	for _, extractor := range rn.snapshotExtractors {
-		if err := extractor.InitialSnapshot(ctx, events); err != nil {
-			return fmt.Errorf("apply initial %s snapshot to %s: %w", rn.gvk, extractor.TypedName(), err)
-		}
-	}
-	close(rn.initialSnapshotDone)
-	return nil
-}
-
-func (rn *notificationReconciler) dispatch(ctx context.Context, log logr.Logger, event *fwkdl.NotificationEvent) (ctrl.Result, error) {
+func (rn *notificationReconciler) dispatch(ctx context.Context, log logr.Logger, event *fwkdl.NotificationEvent) error {
 	log.V(logging.TRACE).Info("processing notification", "eventType", event.Type)
 
 	processed, err := rn.src.Notify(ctx, *event)
 	if err != nil {
 		log.Error(err, "notifier failed to process event")
-		return ctrl.Result{}, err
+		return err
 	}
 	if processed == nil {
-		return ctrl.Result{}, nil
+		return nil
 	}
 
+	var extractErrors []error
 	for _, ext := range rn.extractors {
 		if err := ext.Extract(ctx, *processed); err != nil {
 			log.Error(err, "extractor failed", "extractor", ext.TypedName())
+			extractErrors = append(extractErrors, fmt.Errorf("extractor %s failed: %w", ext.TypedName(), err))
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return errors.Join(extractErrors...)
 }

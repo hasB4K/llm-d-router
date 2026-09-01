@@ -338,10 +338,11 @@ With `sum` or `max-role`, a revision is ineligible until every required role
 has at least one Ready Pod. If no revision survives, request control returns
 HTTP 503.
 
-When revision gating is enabled, EPP does not report ready until the Screener
-has applied a complete initial Pod snapshot. Kubernetes therefore does not send
-traffic during cache initialization. After EPP is ready, a revision that loses a
-required role still returns HTTP 503 until the role is Ready again.
+When revision gating is enabled, EPP does not report ready until the data layer
+has processed every Pod notification from the initial Kubernetes list.
+Kubernetes therefore does not send traffic during cache initialization. After
+EPP is ready, a revision that loses a required role still returns HTTP 503 until
+the role is Ready again.
 
 A strict header with no matching endpoint also returns HTTP 503. The plugin
 never silently substitutes another revision or crosses revisions.
