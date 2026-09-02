@@ -31,49 +31,65 @@ import (
 
 var errInvalidSharedRevision = errors.New("cross-replica syncer returned an invalid rollout revision")
 
-// Screen applies revision gating and strict selectors before scheduling
-// profiles observe the endpoint set.
+// Screen applies revision gating and strict revision selection before
+// scheduling profiles observe the endpoint set.
 func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
-	current := endpoints
-	if c.config.RevisionGating.Active() {
-		if request == nil {
-			return nil
+	requestedRevision := c.requestedRevision(request)
+	if !c.config.RevisionGating.Active() {
+		if requestedRevision == "" {
+			return endpoints
 		}
-		seenRevisions := uniqueRevisions(current, c.revisionLabelKey)
-		distribution := c.distributionSnapshot()
-		// TODO: Make the initial Pod snapshot a condition of EPP readiness.
-		// Until a generic readiness hook exists, an empty snapshot fails closed.
-		shares := make(map[string]float64, len(seenRevisions))
-		allowedRevisions := make(map[string]struct{}, len(seenRevisions))
-		for revision := range seenRevisions {
-			share := distribution.shares[revision]
-			// If one required role is missing, this revision cannot serve a
-			// disaggregated request yet. Missing roles and revisions absent
-			// from the warmed distribution both resolve to zero and fail closed.
-			if share == 0 {
-				continue
+		result := c.filterRevisions(endpoints, nil, requestedRevision)
+		if len(result) == 0 {
+			recordStrictRevisionNoMatch(c.typedName.Name)
+		}
+		return result
+	}
+
+	if request == nil {
+		return nil
+	}
+	seenRevisions := uniqueRevisions(endpoints, c.revisionLabelKey)
+	distribution := c.distributionSnapshot()
+	// TODO: Make the initial Pod snapshot a condition of EPP readiness.
+	// Until a generic readiness hook exists, an empty snapshot fails closed.
+	shares := make(map[string]float64, len(seenRevisions))
+	allowedRevisions := make(map[string]struct{}, len(seenRevisions))
+	for revision := range seenRevisions {
+		share := distribution.shares[revision]
+		// If one required role is missing, this revision cannot serve a
+		// disaggregated request yet. Missing roles and revisions absent
+		// from the warmed distribution both resolve to zero and fail closed.
+		if share == 0 {
+			continue
+		}
+		shares[revision] = share
+		allowedRevisions[revision] = struct{}{}
+	}
+	chosenRevision := requestedRevision
+	if chosenRevision == "" {
+		chosenRevision = pickWeightedRevision(shares, rand.Float64())
+		if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {
+			var err error
+			chosenRevision, err = c.getOrSetRevision(ctx, decisionID, chosenRevision)
+			if err != nil {
+				log.FromContext(ctx).Error(err, "failed to coordinate rollout revision")
+				return nil
 			}
-			shares[revision] = share
-			allowedRevisions[revision] = struct{}{}
-		}
-		chosenRevision := ""
-		if !c.hasStrictRevisionHeader(request) {
-			chosenRevision = pickWeightedRevision(shares, rand.Float64())
-			if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {
-				var err error
-				chosenRevision, err = c.getOrSetRevision(ctx, decisionID, chosenRevision)
-				if err != nil {
-					log.FromContext(ctx).Error(err, "failed to coordinate rollout revision")
-					return nil
-				}
-			}
-		}
-		current = c.applyRevisionDecision(current, allowedRevisions, chosenRevision)
-		if len(current) == 0 {
-			return nil
 		}
 	}
-	return c.screenStrictSelectors(ctx, request, current)
+	result := c.filterRevisions(endpoints, allowedRevisions, chosenRevision)
+	if requestedRevision != "" && len(result) == 0 {
+		recordStrictRevisionNoMatch(c.typedName.Name)
+	}
+	return result
+}
+
+func (c *Screener) requestedRevision(request *fwksched.InferenceRequest) string {
+	if request == nil {
+		return ""
+	}
+	return request.Headers[c.revisionHeaderName]
 }
 
 func revisionDecisionID(request *fwksched.InferenceRequest) string {
@@ -116,10 +132,10 @@ func (c *Screener) crossReplicaSyncer() fwkdl.CrossReplicaSyncer {
 	return syncer
 }
 
-func (c *Screener) applyRevisionDecision(
+func (c *Screener) filterRevisions(
 	endpoints []fwksched.Endpoint,
 	allowedRevisions map[string]struct{},
-	chosenRevision string,
+	revisionDecision string,
 ) []fwksched.Endpoint {
 	result := make([]fwksched.Endpoint, 0, len(endpoints))
 	for _, endpoint := range endpoints {
@@ -127,60 +143,17 @@ func (c *Screener) applyRevisionDecision(
 			continue
 		}
 		revision := endpoint.GetMetadata().Labels[c.revisionLabelKey]
-		if _, covered := allowedRevisions[revision]; !covered {
-			continue
+		if allowedRevisions != nil {
+			if _, covered := allowedRevisions[revision]; !covered {
+				continue
+			}
 		}
-		if chosenRevision != "" && revision != chosenRevision {
+		if revisionDecision != "" && revision != revisionDecision {
 			continue
 		}
 		result = append(result, endpoint)
 	}
 	return result
-}
-
-func (c *Screener) screenStrictSelectors(_ context.Context, request *fwksched.InferenceRequest, endpoints []fwksched.Endpoint) []fwksched.Endpoint {
-	current := endpoints
-	if request == nil || len(current) == 0 {
-		return current
-	}
-	for _, selector := range c.config.HeaderSelectors {
-		if selector.Mode != ModeStrict {
-			continue
-		}
-		requested := request.Headers[selector.HeaderName]
-		if requested == "" {
-			continue
-		}
-		matched := make([]fwksched.Endpoint, 0, len(current))
-		for _, endpoint := range current {
-			if endpoint == nil || endpoint.GetMetadata() == nil {
-				continue
-			}
-			if endpoint.GetMetadata().Labels[selector.LabelKey] == requested {
-				matched = append(matched, endpoint)
-			}
-		}
-		current = matched
-		if len(matched) == 0 {
-			recordStrictHeaderNoMatch(c.typedName.Name, selector.Name)
-		}
-		if len(current) == 0 {
-			return current
-		}
-	}
-	return current
-}
-
-func (c *Screener) hasStrictRevisionHeader(request *fwksched.InferenceRequest) bool {
-	if request == nil {
-		return false
-	}
-	for _, selector := range c.config.HeaderSelectors {
-		if selector.Mode == ModeStrict && selector.LabelKey == c.revisionLabelKey && request.Headers[selector.HeaderName] != "" {
-			return true
-		}
-	}
-	return false
 }
 
 func uniqueRevisions(endpoints []fwksched.Endpoint, revisionLabelKey string) map[string]struct{} {

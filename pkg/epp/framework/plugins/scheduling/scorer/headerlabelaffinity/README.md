@@ -1,7 +1,7 @@
 # Header Label Affinity Scorer
 
 **Type:** `header-label-affinity-scorer`
-**Interface:** `scheduling.Scorer`
+**Interfaces:** `scheduling.Scorer`, `requestcontrol.ResponseHeaderProcessor`
 
 Adds soft affinity for endpoints whose configured label equals a request
 header. A matching endpoint receives a score of `1`; every other endpoint
@@ -16,6 +16,7 @@ each preference to have its own scheduling-profile weight.
 |---|---|---|---|
 | `headerName` | string | Yes | Request header containing the preferred label value. |
 | `labelKey` | string | Yes | Endpoint label compared with the request header. |
+| `stampResponseHeader` | boolean | No | Copies the selected endpoint's label into `headerName` on the response. Defaults to `false`. |
 
 ## Configuration
 
@@ -26,6 +27,7 @@ plugins:
   parameters:
     headerName: x-disagg-slice
     labelKey: disaggregatedset.x-k8s.io/slice
+    stampResponseHeader: true
 - type: header-label-affinity-scorer
   name: zone-affinity
   parameters:
@@ -44,8 +46,8 @@ schedulingProfiles:
   - pluginRef: picker
 ```
 
-The scorer does not write response headers. Protocols that return the selected
-label to a later request must configure response-header stamping separately.
+Response-header stamping is optional. Enable it when a coordinator must pass
+the selected label from one request to a later request.
 
 ## DisaggregatedSet Slice Affinity
 
@@ -76,9 +78,9 @@ The controller labels every Pod in each topology copy with
 When each slice is placed within one NVL72 domain, preferring the slice selected
 for an earlier role can avoid a cross-domain KV-cache transfer.
 
-The rollout Screener stamps the selected prefill Pod's slice into
-`x-disagg-slice`. The generic scorer repeats the mapping so the decode profile
-prefers Pods from that slice:
+The affinity scorer stamps the selected prefill Pod's slice into
+`x-disagg-slice`, then uses that request header to prefer the same slice for
+decode:
 
 ```yaml
 plugins:
@@ -87,24 +89,18 @@ plugins:
   parameters:
     scope:
       labelSelector: disaggregatedset.x-k8s.io/name=my-set
-    headerSelectors:
-    - name: revision
-      headerName: x-disagg-revision
-      labelKey: disaggregatedset.x-k8s.io/revision
-      mode: strict
-    - name: slice
-      headerName: x-disagg-slice
-      labelKey: disaggregatedset.x-k8s.io/slice
-      mode: prefer
     revisionGating:
+      revisionHeaderName: x-disagg-revision
+      revisionLabelKey: disaggregatedset.x-k8s.io/revision
+      roleLabelKey: disaggregatedset.x-k8s.io/role
       mode: max-role
-      requireRoles:
-        values: [prefill, decode]
+      requiredRoles: [prefill, decode]
 - type: header-label-affinity-scorer
   name: slice-affinity
   parameters:
     headerName: x-disagg-slice
     labelKey: disaggregatedset.x-k8s.io/slice
+    stampResponseHeader: true
 - type: weighted-random-picker
   name: picker
 

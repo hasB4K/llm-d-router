@@ -594,32 +594,6 @@ func TestScreenerStrictRevisionBypassesSharedRoutingDecision(t *testing.T) {
 	}
 }
 
-func TestScreenerStrictNonRevisionSelectorStillCoordinatesRevision(t *testing.T) {
-	config := validConfig()
-	config.HeaderSelectors = append(config.HeaderSelectors, HeaderSelector{
-		Name: "slice", HeaderName: "x-disagg-slice", LabelKey: "disaggregatedset.x-k8s.io/slice", Mode: ModeStrict,
-	})
-	screener := newTestScreener(config)
-	seedCounts(t, screener, map[string]map[string]int{
-		"v1": {"prefill": 1, "decode": 1},
-		"v2": {"prefill": 1, "decode": 1},
-	})
-	syncer := &decisionSyncer{actual: "v2"}
-	screener.handle.SetCrossReplicaSyncer(syncer)
-	candidates := candidatePool(1, 1)
-	for _, candidate := range candidates {
-		candidate.GetMetadata().Labels["disaggregatedset.x-k8s.io/slice"] = "slice-a"
-	}
-	request := &fwksched.InferenceRequest{Headers: map[string]string{
-		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
-		"x-disagg-slice":                      "slice-a",
-	}}
-	got := screenCandidates(t, screener, request, candidates)
-	if len(got) != 1 || got[0].GetMetadata().Labels[testRevLabel] != "v2" || syncer.calls != 1 {
-		t.Fatalf("slice selector bypassed revision coordination: endpoints=%v calls=%d", got, syncer.calls)
-	}
-}
-
 func candidatePool(v1, v2 int) []fwksched.Endpoint {
 	result := make([]fwksched.Endpoint, 0, v1+v2)
 	for i := range v1 {
@@ -631,7 +605,7 @@ func candidatePool(v1, v2 int) []fwksched.Endpoint {
 	return result
 }
 
-func TestStrictSelectors(t *testing.T) {
+func TestScreenerStrictRevisionWithGatingDisabled(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
 	screener := newTestScreener(config)
@@ -647,7 +621,7 @@ func TestStrictSelectors(t *testing.T) {
 	}
 }
 
-func TestResponseHeaderStampsSelectors(t *testing.T) {
+func TestResponseHeaderStampsRevision(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	response := &fwkrc.Response{Headers: map[string]string{}}
 	screener.ResponseHeader(context.Background(), nil, response, &fwkdl.EndpointMetadata{Labels: revLabels("v1")})
@@ -656,7 +630,7 @@ func TestResponseHeaderStampsSelectors(t *testing.T) {
 	}
 }
 
-func TestResponseHeaderStampsSelectorsWithGatingDisabled(t *testing.T) {
+func TestResponseHeaderStampsRevisionWithGatingDisabled(t *testing.T) {
 	config := validConfig()
 	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
 	screener := newTestScreener(config)

@@ -25,15 +25,18 @@ import (
 	"fmt"
 	"strings"
 
+	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
 	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
+	fwkrc "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/requestcontrol"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
 const PluginType = "header-label-affinity-scorer"
 
 type parameters struct {
-	HeaderName string `json:"headerName"`
-	LabelKey   string `json:"labelKey"`
+	HeaderName          string `json:"headerName"`
+	LabelKey            string `json:"labelKey"`
+	StampResponseHeader bool   `json:"stampResponseHeader,omitempty"`
 }
 
 // Factory creates a scorer for one request-header-to-endpoint-label mapping.
@@ -55,21 +58,26 @@ func Factory(name string, rawParameters *json.Decoder, _ fwkplugin.Handle) (fwkp
 		name = PluginType
 	}
 	return &Scorer{
-		typedName:  fwkplugin.TypedName{Type: PluginType, Name: name},
-		headerName: strings.ToLower(params.HeaderName),
-		labelKey:   params.LabelKey,
+		typedName:           fwkplugin.TypedName{Type: PluginType, Name: name},
+		headerName:          strings.ToLower(params.HeaderName),
+		labelKey:            params.LabelKey,
+		stampResponseHeader: params.StampResponseHeader,
 	}, nil
 }
 
 // Scorer gives endpoints whose label matches the request header a soft
 // affinity score without removing non-matching endpoints.
 type Scorer struct {
-	typedName  fwkplugin.TypedName
-	headerName string
-	labelKey   string
+	typedName           fwkplugin.TypedName
+	headerName          string
+	labelKey            string
+	stampResponseHeader bool
 }
 
-var _ fwksched.Scorer = (*Scorer)(nil)
+var (
+	_ fwksched.Scorer               = (*Scorer)(nil)
+	_ fwkrc.ResponseHeaderProcessor = (*Scorer)(nil)
+)
 
 func (s *Scorer) TypedName() fwkplugin.TypedName { return s.typedName }
 
@@ -91,4 +99,15 @@ func (s *Scorer) Score(_ context.Context, request *fwksched.InferenceRequest, en
 		}
 	}
 	return scores
+}
+
+// ResponseHeader copies the selected endpoint's label into the configured
+// header when response stamping is enabled.
+func (s *Scorer) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, endpoint *fwkdl.EndpointMetadata) {
+	if !s.stampResponseHeader || endpoint == nil || response == nil || response.Headers == nil {
+		return
+	}
+	if value := endpoint.Labels[s.labelKey]; value != "" {
+		response.Headers[s.headerName] = value
+	}
 }

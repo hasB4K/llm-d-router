@@ -177,7 +177,7 @@ traffic: A 90%, B 10%
 
 The dominant role is selected once for the whole distribution. It cannot be
 prefill for one revision and decode for another. If role totals are equal, the
-first role in `revisionGating.requireRoles.values` wins the tie.
+first role in `revisionGating.requiredRoles` wins the tie.
 
 This mode is useful for a stable, intentionally asymmetric role ratio such as
 2P:10D or 10P:2D. It assumes that the more numerous role is a reasonable proxy
@@ -214,31 +214,27 @@ counts.
 ### `disabled`
 
 This mode disables revision coverage checks and weighted revision selection.
-It does **not** disable header selectors or response-header stamping:
+Strict revision selection and response-header stamping remain enabled:
 
 - With no revision header, all located candidates continue to filters,
   scorers, and the picker.
-- The selected endpoint's configured labels are still stamped on the response.
-- With a revision header, a `strict` selector still keeps only matching
-  endpoints and fails if none match.
+- The selected endpoint's revision is still stamped on the response.
+- With a revision header, only matching endpoints remain. No match fails
+  closed.
 
 This mode does not make a revision decision. It cannot keep separate EPPs, or
 the profiles of a single EPP, on one revision.
 
-## Header Selectors
+## Revision Header
 
-| Mode | Behavior |
-|---|---|
-| `strict` | Keeps only endpoints whose label equals the request header. No match fails closed. |
-| `prefer` | Stamps the selected label without screening candidates. Configure a [`header-label-affinity-scorer`](../../../scheduling/scorer/headerlabelaffinity/README.md) to apply the soft preference. |
+The revision header is always strict. When a request supplies it, the Screener
+keeps only endpoints whose revision label has the requested value. With an
+active gating mode, that revision must also have a Ready Pod for every required
+role. No match fails closed.
 
-Every selector also stamps its configured response header from the endpoint
-that served the request. The mode identifies whether the Screener applies a
-hard constraint or only stamps the label. Stamping is independent of the
-revision gating mode.
-
-The generic scorer repeats the `headerName` and `labelKey` mapping. Keeping its
-configuration independent allows each preference to use a different weight.
+The Screener stamps the selected endpoint's revision into the same response
+header. Other label affinities, such as slice affinity, belong in a
+[`header-label-affinity-scorer`](../../../scheduling/scorer/headerlabelaffinity/README.md).
 
 ## Configuration
 
@@ -251,24 +247,18 @@ plugins:
   parameters:
     scope:
       labelSelector: "disaggregatedset.x-k8s.io/name=my-set"
-    headerSelectors:
-    - name: revision
-      headerName: x-disagg-revision
-      labelKey: disaggregatedset.x-k8s.io/revision
-      mode: strict
-    - name: slice
-      headerName: x-disagg-slice
-      labelKey: disaggregatedset.x-k8s.io/slice
-      mode: prefer
     revisionGating:
+      revisionHeaderName: x-disagg-revision
+      revisionLabelKey: disaggregatedset.x-k8s.io/revision
+      roleLabelKey: disaggregatedset.x-k8s.io/role
       mode: max-role
-      requireRoles:
-        values: [prefill, decode]
+      requiredRoles: [prefill, decode]
 - type: header-label-affinity-scorer
   name: slice-affinity
   parameters:
     headerName: x-disagg-slice
     labelKey: disaggregatedset.x-k8s.io/slice
+    stampResponseHeader: true
 - type: weighted-random-picker
   name: picker
 
@@ -288,21 +278,12 @@ request. Do not add it to a scheduling profile.
 | Name | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `scope.labelSelector` | string | Yes | | Selects the Pods observed for cross-role revision coverage. |
-| `headerSelectors` | array | No | `[]` | Header-to-label mappings used for strict screening and response-header stamping. |
-| `revisionGating` | object | Yes | | Revision screening configuration. Use `mode: disabled` to retain selectors and response-header stamping without revision coverage or weighted selection. |
+| `revisionGating` | object | Yes | | Revision screening configuration. |
 | `revisionGating.mode` | string | Yes | | `sum`, `max-role`, or `disabled`. |
-| `revisionGating.requireRoles.values` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. |
+| `revisionGating.requiredRoles` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. List order breaks a `max-role` tie. |
+| `revisionGating.revisionHeaderName` | string | No | `x-disagg-revision` | Request and response header carrying the rollout revision. A supplied value is a strict constraint. |
 | `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
 | `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
-
-Each `headerSelectors` entry has:
-
-| Name | Type | Description |
-|---|---|---|
-| `name` | string | Stable selector identifier, used as a metric label for strict selectors. |
-| `headerName` | string | Request and response header carrying the selected label value. |
-| `labelKey` | string | Kubernetes Pod label whose value is compared with the request header and copied from the selected endpoint into the response header. |
-| `mode` | string | `strict` screens candidates globally; `prefer` only stamps the selected value and leaves scoring to a separate plugin. |
 
 ## DisaggregatedSet Slice Affinity
 
@@ -314,10 +295,10 @@ slice is unavailable or overloaded.
 
 Strict revision selection is supported for both P/D and E/P/D because the
 shared revision decision is coordinated independently of phase response order.
-Strict slice selection is supported for P/D, where a forwarded prefill slice
-can constrain decode, but it does not provide an end-to-end slice guarantee for
-E/P/D. Slice selection should normally use `prefer` so KV-cache and load-aware
-scoring can select another slice when it is a better candidate.
+Slice selection is a soft preference so KV-cache and load-aware scoring can
+select another slice when it is a better candidate. Set
+`stampResponseHeader: true` on the slice affinity scorer to return the selected
+slice to the coordinator.
 
 The scorer weight represents how preferable the same NVL72 domain is relative
 to the other scorers in the profile. Benchmark same-slice and cross-slice KV
@@ -350,7 +331,7 @@ never silently substitutes another revision or crosses revisions.
 
 ## Metrics
 
-- `llm_d_epp_disaggregatedset_strict_header_no_match_total`: strict header
+- `llm_d_epp_disaggregatedset_strict_revision_no_match_total`: strict revision
   selections that matched no endpoint and failed closed.
 - `llm_d_epp_disaggregatedset_revision_gating_share`: current weighted share
   from `0` to `1` for each observed revision. Incomplete revisions report `0`.
