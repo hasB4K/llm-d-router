@@ -83,12 +83,16 @@ func revisionDecisionID(request *fwksched.InferenceRequest) string {
 	if decisionID := request.Headers[reqcommon.RevisionDecisionIDHeaderKey]; decisionID != "" {
 		return decisionID
 	}
+	// A single downstream request needs no identifier beyond its request ID.
 	return request.Headers[reqcommon.RequestIDHeaderKey]
 }
 
 func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (string, error) {
 	syncer := c.crossReplicaSyncer()
 	if syncer == nil {
+		// A coordinator issues a separate request for each phase. When those
+		// requests reach one EPP process, this store makes their shared decision
+		// ID reuse the first revision without requiring cross-replica storage.
 		revision, _ := c.localRevisionDecisions.GetOrSet(id, candidate)
 		return revision, nil
 	}

@@ -17,6 +17,7 @@ limitations under the License.
 package disaggregatedsetrollout
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -27,9 +28,8 @@ const (
 )
 
 type localGetOrSet struct {
-	mu        sync.Mutex
-	values    map[string]localGetOrSetValue
-	lastSweep time.Time
+	mu     sync.Mutex
+	values map[string]localGetOrSetValue
 }
 
 type localGetOrSetValue struct {
@@ -45,14 +45,6 @@ func (s *localGetOrSet) GetOrSet(key, candidate string) (string, bool) {
 	if s.values == nil {
 		s.values = make(map[string]localGetOrSetValue)
 	}
-	if s.lastSweep.IsZero() || now.Sub(s.lastSweep) >= localGetOrSetSweepInterval {
-		for storedKey, storedValue := range s.values {
-			if !now.Before(storedValue.expiresAt) {
-				delete(s.values, storedKey)
-			}
-		}
-		s.lastSweep = now
-	}
 	if storedValue, found := s.values[key]; found {
 		if now.Before(storedValue.expiresAt) {
 			return storedValue.value, true
@@ -64,4 +56,29 @@ func (s *localGetOrSet) GetOrSet(key, candidate string) (string, bool) {
 		expiresAt: now.Add(localGetOrSetTTL),
 	}
 	return candidate, false
+}
+
+func (s *localGetOrSet) runGC(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			s.deleteExpired(now)
+		}
+	}
+}
+
+func (s *localGetOrSet) deleteExpired(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for key, value := range s.values {
+		if !now.Before(value.expiresAt) {
+			delete(s.values, key)
+		}
+	}
 }

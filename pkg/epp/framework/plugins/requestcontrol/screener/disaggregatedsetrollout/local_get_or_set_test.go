@@ -17,6 +17,7 @@ limitations under the License.
 package disaggregatedsetrollout
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"testing"
@@ -76,5 +77,44 @@ func TestLocalGetOrSetExpires(t *testing.T) {
 	value, existed := store.GetOrSet("decision-id", "new-revision")
 	if existed || value != "new-revision" {
 		t.Fatalf("expired local value = (%q, %t), want (new-revision, false)", value, existed)
+	}
+}
+
+func TestLocalGetOrSetGCDropsExpiredValuesWithoutRequest(t *testing.T) {
+	store := localGetOrSet{
+		values: map[string]localGetOrSetValue{
+			"decision-id": {
+				value:     "old-revision",
+				expiresAt: time.Now().Add(-time.Second),
+			},
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		store.runGC(ctx, time.Millisecond)
+		close(done)
+	}()
+
+	deadline := time.After(250 * time.Millisecond)
+	for {
+		store.mu.Lock()
+		_, found := store.values["decision-id"]
+		store.mu.Unlock()
+		if !found {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("expired value was not removed by the background GC")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("background GC did not stop after context cancellation")
 	}
 }

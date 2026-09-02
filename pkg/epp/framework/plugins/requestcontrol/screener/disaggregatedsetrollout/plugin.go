@@ -111,7 +111,7 @@ func newScreener(name string, config Config, scope labels.Selector, handle fwkpl
 		revisionLabelKey = config.RevisionGating.RevisionLabelKey
 		roleLabelKey = config.RevisionGating.RoleLabelKey
 	}
-	return &Screener{
+	screener := &Screener{
 		typedName:                fwkplugin.TypedName{Type: PluginType, Name: name},
 		config:                   config,
 		scope:                    scope,
@@ -121,6 +121,8 @@ func newScreener(name string, config Config, scope labels.Selector, handle fwkpl
 		handle:                   handle,
 		pods:                     make(map[types.NamespacedName]podInfo),
 	}
+	go screener.localRevisionDecisions.runGC(handle.Context(), localGetOrSetSweepInterval)
+	return screener
 }
 
 func (c *Screener) TypedName() fwkplugin.TypedName { return c.typedName }
