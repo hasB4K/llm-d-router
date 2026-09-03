@@ -8,18 +8,6 @@ data:
     apiVersion: llm-d.ai/v1alpha1
     kind: EndpointPickerConfig
     plugins:
-    - type: disaggregatedset-rollout-screener
-      name: rollout-screener
-      parameters:
-        scope:
-          labelSelector: "disaggregatedset.x-k8s.io/name=revision-rollout"
-        headerSelectors:
-        - name: role
-          headerName: x-preferred-role
-          labelKey: disaggregatedset.x-k8s.io/role
-          mode: prefer
-        revisionGating:
-          mode: disabled
     - type: header-label-affinity-scorer
       name: role-affinity
       parameters:

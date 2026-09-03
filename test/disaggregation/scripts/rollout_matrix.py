@@ -593,8 +593,8 @@ async def rollout_shape(
     apply_yaml(target)
 
     seen_states = {format_counts(ready_counts(pods(namespace)))}
-    deadline = time.monotonic() + 900
-    while time.monotonic() < deadline:
+    progress_deadline = time.monotonic() + 900
+    while time.monotonic() < progress_deadline:
         current_pods = pods(namespace)
         counts = ready_counts(current_pods)
         state = format_counts(counts)
@@ -610,6 +610,10 @@ async def rollout_shape(
             )
             if sampled:
                 seen_states.add(state)
+                # Sampling thousands of requests can take longer than the
+                # rollout itself. Start a fresh no-progress window after each
+                # completed checkpoint.
+                progress_deadline = time.monotonic() + 900
 
         target_revisions = [
             revision for revision in counts if revision != old_revision
@@ -634,8 +638,9 @@ async def rollout_shape(
         role = chosen["metadata"]["labels"][ROLE_LABEL]
         print(f"  promote {role} pod {name}")
         kubectl(namespace, "exec", name, "-c", "server", "--", "touch", "/tmp/ready")
+        progress_deadline = time.monotonic() + 900
         await asyncio.sleep(2)
-    raise TimeoutError(f"rollout {shape_name} did not complete")
+    raise TimeoutError(f"rollout {shape_name} made no progress for 900 seconds")
 
 
 def parse_args() -> argparse.Namespace:

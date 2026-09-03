@@ -13,15 +13,12 @@ data:
       parameters:
         scope:
           labelSelector: "disaggregatedset.x-k8s.io/name=revision-rollout"
-        headerSelectors:
-        - name: revision
-          headerName: x-disagg-revision
-          labelKey: disaggregatedset.x-k8s.io/revision
-          mode: strict
         revisionGating:
+          revisionHeaderName: x-disagg-revision
+          revisionLabelKey: disaggregatedset.x-k8s.io/revision
+          roleLabelKey: disaggregatedset.x-k8s.io/role
           mode: __MODE__
-          requireRoles:
-            values: [prefill, decode]
+          requiredRoles: [prefill, decode]
     - type: prefill-filter
     - type: decode-filter
     - type: weighted-random-picker

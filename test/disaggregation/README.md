@@ -62,23 +62,11 @@ before either topology executes profile filters, scorers, or pickers. The test
 EPPs pass `--allow-experimental-plugins` because the new plugins have Alpha
 stability.
 
-One additional EPP duplicates a preferred-role header/label mapping between the
-Screener and the generic affinity scorer:
+One additional EPP uses one preferred-role header/label mapping for both soft
+affinity and response-header stamping:
 
 ```yaml
 plugins:
-- type: disaggregatedset-rollout-screener
-  name: rollout-screener
-  parameters:
-    scope:
-      labelSelector: "disaggregatedset.x-k8s.io/name=revision-rollout"
-    headerSelectors:
-    - name: role
-      headerName: x-preferred-role
-      labelKey: disaggregatedset.x-k8s.io/role
-      mode: prefer
-    revisionGating:
-      mode: disabled
 - type: header-label-affinity-scorer
   name: role-affinity
   parameters:
@@ -95,10 +83,12 @@ schedulingProfiles:
   - pluginRef: picker
 ```
 
-At each initial stable state, the preference check requests `prefill` and then
-`decode`. It verifies the selected Pod and the stamped `x-preferred-role`
-response header match the requested role. Non-matching endpoints remain
-eligible because the scorer is a soft preference.
+Response-header stamping is intentionally omitted from the configuration so
+the test exercises its `true` default. At each initial stable state, the
+preference check requests `prefill` and then `decode`. It verifies the selected
+Pod and the stamped `x-preferred-role` response header match the requested
+role. Non-matching endpoints remain eligible because the scorer is a soft
+preference.
 
 ## Prerequisites
 
