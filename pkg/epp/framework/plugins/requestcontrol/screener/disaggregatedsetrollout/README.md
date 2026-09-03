@@ -129,22 +129,35 @@ When a strict revision header is already present, the plugin does not make a
 new weighted choice. It checks that the requested revision has all required
 roles and keeps only endpoints with that revision.
 
-### Two EPPs
+### Separate Prefill and Decode EPPs (P/D)
 
-Separate phase EPPs must make the same revision decision even though each one
-schedules independently. The coordinator generates one
-`x-llm-d-revision-decision-id` for the request and sends it to every encode,
-prefill, and decode EPP request.
+Prefill first chooses a covered revision and stamps it into the
+`x-disagg-revision` response header. The coordinator must copy that header into
+the decode request. Decode treats it as a strict constraint and never calls
+`GetOrSet`, so the prefill and decode EPPs do not need to share a
+`CrossReplicaSyncer`:
 
-Each Screener can propose a covered revision, but atomic `GetOrSet` makes the
-first stored revision authoritative. In E/P/D, parallel encode requests can
-therefore begin together without waiting for one encode response. Prefill and
-decode use the same decision ID and receive the same revision.
+```text
+prefill request -> choose revision B -> x-disagg-revision: B
+                                             |
+                                             v
+decode request  -> strict revision B -> no GetOrSet
+```
 
-With a configured `CrossReplicaSyncer`, this coordination works when requests
-are distributed across multiple EPP replicas. Without one, the Screener stores
-decisions locally. That fallback is safe only when a single EPP replica handles
-the pool.
+A decode request without the forwarded `x-disagg-revision` does not implement
+the supported P/D protocol. Do not rely on `GetOrSet` to coordinate separate
+prefill and decode EPPs.
+
+### Parallel Encode Requests (E/P/D)
+
+Parallel encode requests cannot wait for an earlier response to provide
+`x-disagg-revision`. The coordinator gives them the same
+`x-llm-d-revision-decision-id`, and atomic `GetOrSet` makes the first proposed
+covered revision authoritative. Requests that can reach different EPP replicas
+must share a `CrossReplicaSyncer`; a single EPP process can use the local
+fallback. As soon as a phase response supplies `x-disagg-revision`, the
+coordinator forwards that header to later requests, which use strict filtering
+instead of `GetOrSet`.
 
 ### One EPP
 
@@ -258,7 +271,6 @@ plugins:
   parameters:
     headerName: x-disagg-slice
     labelKey: disaggregatedset.x-k8s.io/slice
-    stampResponseHeader: true
 - type: weighted-random-picker
   name: picker
 
@@ -293,12 +305,12 @@ within one NVL72 NVLink domain. Preferring the same slice can avoid a slower
 cross-domain KV-cache transfer while retaining fallback capacity when that
 slice is unavailable or overloaded.
 
-Strict revision selection is supported for both P/D and E/P/D because the
-shared revision decision is coordinated independently of phase response order.
-Slice selection is a soft preference so KV-cache and load-aware scoring can
-select another slice when it is a better candidate. Set
-`stampResponseHeader: true` on the slice affinity scorer to return the selected
-slice to the coordinator.
+Strict revision selection is supported in P/D by forwarding
+`x-disagg-revision`. E/P/D uses the shared decision ID only for parallel
+requests that start before that header exists. Slice selection is a soft
+preference, so KV-cache and load-aware scoring can select another slice when it
+is a better candidate. The affinity scorer returns the actually selected slice
+to the coordinator by default.
 
 The scorer weight represents how preferable the same NVL72 domain is relative
 to the other scorers in the profile. Benchmark same-slice and cross-slice KV

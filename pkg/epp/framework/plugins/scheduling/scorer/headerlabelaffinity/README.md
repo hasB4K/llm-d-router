@@ -16,7 +16,7 @@ each preference to have its own scheduling-profile weight.
 |---|---|---|---|
 | `headerName` | string | Yes | Request header containing the preferred label value. |
 | `labelKey` | string | Yes | Endpoint label compared with the request header. |
-| `stampResponseHeader` | boolean | No | Copies the selected endpoint's label into `headerName` on the response. Defaults to `false`. |
+| `stampResponseHeader` | boolean | No | Copies the selected endpoint's label into `headerName` on the response. Defaults to `true`; set it to `false` when the header is input-only. |
 
 ## Configuration
 
@@ -27,12 +27,12 @@ plugins:
   parameters:
     headerName: x-disagg-slice
     labelKey: disaggregatedset.x-k8s.io/slice
-    stampResponseHeader: true
 - type: header-label-affinity-scorer
   name: zone-affinity
   parameters:
     headerName: x-preferred-zone
     labelKey: topology.kubernetes.io/zone
+    stampResponseHeader: false
 - type: weighted-random-picker
   name: picker
 
@@ -46,8 +46,19 @@ schedulingProfiles:
   - pluginRef: picker
 ```
 
-Response-header stamping is optional. Enable it when a coordinator must pass
-the selected label from one request to a later request.
+The default lifecycle is:
+
+1. With no request header, every endpoint gets affinity score `0`, so the other
+   configured scorers and picker choose an endpoint.
+2. The scorer stamps that endpoint's actual label into the response header.
+3. A coordinator can copy the response header into a later request, where it
+   becomes a soft preference.
+
+When a request already contains the header, the response is still stamped with
+the endpoint that was actually selected. Because affinity is soft, other scores
+can make that label differ from the requested preference. Set
+`stampResponseHeader: false` only when the header is an input hint that must not
+be returned.
 
 ## DisaggregatedSet Slice Affinity
 
@@ -100,7 +111,6 @@ plugins:
   parameters:
     headerName: x-disagg-slice
     labelKey: disaggregatedset.x-k8s.io/slice
-    stampResponseHeader: true
 - type: weighted-random-picker
   name: picker
 

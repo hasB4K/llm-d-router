@@ -38,9 +38,14 @@ func TestFactory(t *testing.T) {
 		wantErr    string
 	}{
 		{
-			name:       "valid",
-			parameters: `{"headerName":"X-Disagg-Slice","labelKey":"disaggregatedset.x-k8s.io/slice","stampResponseHeader":true}`,
+			name:       "response stamping defaults on",
+			parameters: `{"headerName":"X-Disagg-Slice","labelKey":"disaggregatedset.x-k8s.io/slice"}`,
 			wantStamp:  true,
+		},
+		{
+			name:       "response stamping can be disabled",
+			parameters: `{"headerName":"X-Disagg-Slice","labelKey":"disaggregatedset.x-k8s.io/slice","stampResponseHeader":false}`,
+			wantStamp:  false,
 		},
 		{
 			name:       "missing parameters",
@@ -87,6 +92,14 @@ func TestResponseHeader(t *testing.T) {
 		scorer := &Scorer{headerName: "x-slice", labelKey: "slice", stampResponseHeader: true}
 		response := &fwkrc.Response{Headers: map[string]string{}}
 		scorer.ResponseHeader(context.Background(), nil, response, metadata)
+		assert.Equal(t, "slice-a", response.Headers["x-slice"])
+	})
+
+	t.Run("stamps actual selection even when the request preferred another label", func(t *testing.T) {
+		scorer := &Scorer{headerName: "x-slice", labelKey: "slice", stampResponseHeader: true}
+		request := &fwksched.InferenceRequest{Headers: map[string]string{"x-slice": "slice-b"}}
+		response := &fwkrc.Response{Headers: map[string]string{}}
+		scorer.ResponseHeader(context.Background(), request, response, metadata)
 		assert.Equal(t, "slice-a", response.Headers["x-slice"])
 	})
 

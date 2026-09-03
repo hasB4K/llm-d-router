@@ -67,6 +67,11 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 		allowedRevisions[revision] = struct{}{}
 	}
 	chosenRevision := requestedRevision
+	// A forwarded revision header is authoritative. In particular, a decode
+	// request in P/D must use the revision stamped by prefill; it must not depend
+	// on the two EPPs sharing a CrossReplicaSyncer. GetOrSet is only needed when
+	// no earlier phase response exists to provide the header, as with parallel
+	// encode requests in E/P/D.
 	if chosenRevision == "" {
 		chosenRevision = pickWeightedRevision(shares, rand.Float64())
 		if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {

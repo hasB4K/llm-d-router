@@ -36,7 +36,7 @@ const PluginType = "header-label-affinity-scorer"
 type parameters struct {
 	HeaderName          string `json:"headerName"`
 	LabelKey            string `json:"labelKey"`
-	StampResponseHeader bool   `json:"stampResponseHeader,omitempty"`
+	StampResponseHeader *bool  `json:"stampResponseHeader,omitempty"`
 }
 
 // Factory creates a scorer for one request-header-to-endpoint-label mapping.
@@ -57,11 +57,15 @@ func Factory(name string, rawParameters *json.Decoder, _ fwkplugin.Handle) (fwkp
 	if name == "" {
 		name = PluginType
 	}
+	stampResponseHeader := true
+	if params.StampResponseHeader != nil {
+		stampResponseHeader = *params.StampResponseHeader
+	}
 	return &Scorer{
 		typedName:           fwkplugin.TypedName{Type: PluginType, Name: name},
 		headerName:          strings.ToLower(params.HeaderName),
 		labelKey:            params.LabelKey,
-		stampResponseHeader: params.StampResponseHeader,
+		stampResponseHeader: stampResponseHeader,
 	}, nil
 }
 
@@ -101,8 +105,10 @@ func (s *Scorer) Score(_ context.Context, request *fwksched.InferenceRequest, en
 	return scores
 }
 
-// ResponseHeader copies the selected endpoint's label into the configured
-// header when response stamping is enabled.
+// ResponseHeader reports the selected endpoint's actual label, which a
+// coordinator can copy into a later request. This deliberately does not depend
+// on whether the current request carried the header: affinity is soft, so the
+// endpoint that won can have a different label from the requested preference.
 func (s *Scorer) ResponseHeader(_ context.Context, _ *fwksched.InferenceRequest, response *fwkrc.Response, endpoint *fwkdl.EndpointMetadata) {
 	if !s.stampResponseHeader || endpoint == nil || response == nil || response.Headers == nil {
 		return
