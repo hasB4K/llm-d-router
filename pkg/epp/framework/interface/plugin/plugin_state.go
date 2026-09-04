@@ -125,8 +125,11 @@ func (s *PluginState) Read(requestID string, key StateKey) (StateData, error) {
 // Note: overwriting an existing key does NOT trigger OnEvicted on the displaced value.
 func (s *PluginState) Write(requestID string, key StateKey, val StateData) {
 	s.requestToLastAccessTime.Store(requestID, time.Now())
+	// LoadOrStore applies only to the per-request map. It prevents concurrent
+	// first writes from creating competing maps and losing one writer's keys.
 	stateMap, _ := s.storage.LoadOrStore(requestID, &sync.Map{})
 	stateData := stateMap.(*sync.Map)
+	// Write itself remains unconditional and replaces any value for key.
 	stateData.Store(key, val)
 }
 
@@ -135,6 +138,8 @@ func (s *PluginState) Write(requestID string, key StateKey, val StateData) {
 // the returned data was already present.
 func (s *PluginState) ReadOrWrite(requestID string, key StateKey, val StateData) (actual StateData, existed bool) {
 	s.requestToLastAccessTime.Store(requestID, time.Now())
+	// The outer operation chooses one per-request map. The inner operation then
+	// chooses one value for key, so concurrent callers all observe the same winner.
 	stateMap, _ := s.storage.LoadOrStore(requestID, &sync.Map{})
 	actualValue, existed := stateMap.(*sync.Map).LoadOrStore(key, val)
 	return actualValue.(StateData), existed
