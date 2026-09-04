@@ -28,7 +28,7 @@ func validConfig() Config {
 			LabelSelector: "disaggregatedset.x-k8s.io/name=my-set",
 		},
 		RevisionGating: &RevisionGating{
-			RevisionHeaderName: "x-disagg-revision",
+			RevisionHeaderName: "x-llm-d-disagg-revision",
 			RevisionLabelKey:   "disaggregatedset.x-k8s.io/revision",
 			RoleLabelKey:       "disaggregatedset.x-k8s.io/role",
 			Mode:               GatingModeSum,
@@ -163,12 +163,12 @@ func TestGating_Active(t *testing.T) {
 func TestRevisionGating_UnmarshalJSON_LowercasesHeaderName(t *testing.T) {
 	// Normalisation is at the JSON boundary; construction in Go leaves
 	// the field alone.
-	raw := []byte(`{"revisionHeaderName":"X-Disagg-Revision","mode":"sum","requiredRoles":["prefill","decode"]}`)
+	raw := []byte(`{"revisionHeaderName":"X-LLM-D-Disagg-Revision","mode":"sum","requiredRoles":["prefill","decode"]}`)
 	var gating RevisionGating
 	if err := json.Unmarshal(raw, &gating); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if gating.RevisionHeaderName != "x-disagg-revision" {
+	if gating.RevisionHeaderName != "x-llm-d-disagg-revision" {
 		t.Fatalf("header not lowered on unmarshal: got %q", gating.RevisionHeaderName)
 	}
 	if got := strings.Join(gating.RequiredRoles, ","); got != "prefill,decode" {
@@ -187,11 +187,11 @@ func TestRevisionGating_UnmarshalJSON_RejectsOldNestedRoles(t *testing.T) {
 func TestValidate_LeavesHeaderNameAloneOnInCodeConstruction(t *testing.T) {
 	// Validate must not mutate; normalisation is at unmarshal time.
 	cfg := validConfig()
-	cfg.RevisionGating.RevisionHeaderName = "X-Disagg-Revision"
+	cfg.RevisionGating.RevisionHeaderName = "X-LLM-D-Disagg-Revision"
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("mixed-case header name should validate: %v", err)
 	}
-	if cfg.RevisionGating.RevisionHeaderName != "X-Disagg-Revision" {
+	if cfg.RevisionGating.RevisionHeaderName != "X-LLM-D-Disagg-Revision" {
 		t.Fatalf("Validate mutated RevisionHeaderName: got %q", cfg.RevisionGating.RevisionHeaderName)
 	}
 }

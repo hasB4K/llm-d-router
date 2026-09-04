@@ -42,7 +42,7 @@ func TestMetricStrictHeaderNoMatch(t *testing.T) {
 	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
 	screener := newTestScreener(config)
 	screener.Screen(context.Background(),
-		&fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v99"}},
+		&fwksched.InferenceRequest{Headers: map[string]string{"x-llm-d-disagg-revision": "v99"}},
 		[]fwksched.Endpoint{endpoint("p1", revLabels("v1"))},
 	)
 

@@ -101,7 +101,7 @@ plugins:
     scope:
       labelSelector: disaggregatedset.x-k8s.io/name=my-set
     revisionGating:
-      revisionHeaderName: x-disagg-revision
+      revisionHeaderName: x-llm-d-disagg-revision
       revisionLabelKey: disaggregatedset.x-k8s.io/revision
       roleLabelKey: disaggregatedset.x-k8s.io/role
       mode: max-role

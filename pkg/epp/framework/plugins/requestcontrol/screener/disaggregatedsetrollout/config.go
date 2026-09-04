@@ -32,7 +32,7 @@ import (
 
 // DisaggregatedSet rollout protocol and operator label defaults.
 const (
-	DefaultRevisionHeader = "x-disagg-revision"
+	DefaultRevisionHeader = "x-llm-d-disagg-revision"
 	DefaultRevisionLabel  = "disaggregatedset.x-k8s.io/revision"
 	DefaultRoleLabel      = "disaggregatedset.x-k8s.io/role"
 )

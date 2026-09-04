@@ -132,30 +132,30 @@ roles and keeps only endpoints with that revision.
 ### Separate Prefill and Decode EPPs (P/D)
 
 Prefill first chooses a covered revision and stamps it into the
-`x-disagg-revision` response header. The coordinator must copy that header into
+`x-llm-d-disagg-revision` response header. The coordinator must copy that header into
 the decode request. Decode treats it as a strict constraint and never calls
 `GetOrSet`, so the prefill and decode EPPs do not need to share a
 `CrossReplicaSyncer`:
 
 ```text
-prefill request -> choose revision B -> x-disagg-revision: B
+prefill request -> choose revision B -> x-llm-d-disagg-revision: B
                                              |
                                              v
 decode request  -> strict revision B -> no GetOrSet
 ```
 
-A decode request without the forwarded `x-disagg-revision` does not implement
+A decode request without the forwarded `x-llm-d-disagg-revision` does not implement
 the supported P/D protocol. Do not rely on `GetOrSet` to coordinate separate
 prefill and decode EPPs.
 
 ### Parallel Encode Requests (E/P/D)
 
 Parallel encode requests cannot wait for an earlier response to provide
-`x-disagg-revision`. The coordinator gives them the same
+`x-llm-d-disagg-revision`. The coordinator gives them the same
 `x-llm-d-revision-decision-id`, and atomic `GetOrSet` makes the first proposed
 covered revision authoritative. Requests that can reach different EPP replicas
 must share a `CrossReplicaSyncer`; a single EPP process can use the local
-fallback. As soon as a phase response supplies `x-disagg-revision`, the
+fallback. As soon as a phase response supplies `x-llm-d-disagg-revision`, the
 coordinator forwards that header to later requests, which use strict filtering
 instead of `GetOrSet`.
 
@@ -261,7 +261,7 @@ plugins:
     scope:
       labelSelector: "disaggregatedset.x-k8s.io/name=my-set"
     revisionGating:
-      revisionHeaderName: x-disagg-revision
+      revisionHeaderName: x-llm-d-disagg-revision
       revisionLabelKey: disaggregatedset.x-k8s.io/revision
       roleLabelKey: disaggregatedset.x-k8s.io/role
       mode: max-role
@@ -293,7 +293,7 @@ request. Do not add it to a scheduling profile.
 | `revisionGating` | object | Yes | | Revision screening configuration. |
 | `revisionGating.mode` | string | Yes | | `sum`, `max-role`, or `disabled`. |
 | `revisionGating.requiredRoles` | array | Yes for `sum` and `max-role` | | Roles that must each have a Ready Pod for a revision to receive traffic. List order breaks a `max-role` tie. |
-| `revisionGating.revisionHeaderName` | string | No | `x-disagg-revision` | Request and response header carrying the rollout revision. A supplied value is a strict constraint. |
+| `revisionGating.revisionHeaderName` | string | No | `x-llm-d-disagg-revision` | Request and response header carrying the rollout revision. A supplied value is a strict constraint. |
 | `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
 | `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
 
@@ -306,7 +306,7 @@ cross-domain KV-cache transfer while retaining fallback capacity when that
 slice is unavailable or overloaded.
 
 Strict revision selection is supported in P/D by forwarding
-`x-disagg-revision`. E/P/D uses the shared decision ID only for parallel
+`x-llm-d-disagg-revision`. E/P/D uses the shared decision ID only for parallel
 requests that start before that header exists. Slice selection is a soft
 preference, so KV-cache and load-aware scoring can select another slice when it
 is a better candidate. The affinity scorer returns the actually selected slice

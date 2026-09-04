@@ -409,7 +409,7 @@ func TestScreenerPinnedUncoveredRevisionFailsClosed(t *testing.T) {
 		endpoint("v1-p", revLabels("v1")),
 		endpoint("v2-p", revLabels("v2")),
 	}
-	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v1"}}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-llm-d-disagg-revision": "v1"}}
 	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
 		t.Fatalf("uncovered pinned revision must fail closed, got %v", got)
 	}
@@ -586,7 +586,7 @@ func TestScreenerStrictRevisionBypassesSharedRoutingDecision(t *testing.T) {
 	screener.handle.SetCrossReplicaSyncer(syncer)
 	request := &fwksched.InferenceRequest{Headers: map[string]string{
 		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
-		"x-disagg-revision":                   "v1",
+		"x-llm-d-disagg-revision":             "v1",
 	}}
 	got := screenCandidates(t, screener, request, candidatePool(1, 0))
 	if len(got) != 1 || syncer.calls != 0 {
@@ -610,12 +610,12 @@ func TestScreenerStrictRevisionWithGatingDisabled(t *testing.T) {
 	config.RevisionGating = &RevisionGating{Mode: GatingModeDisabled}
 	screener := newTestScreener(config)
 	candidates := []fwksched.Endpoint{endpoint("v1", revLabels("v1")), endpoint("v2", revLabels("v2"))}
-	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-disagg-revision": "v2"}}
+	request := &fwksched.InferenceRequest{Headers: map[string]string{"x-llm-d-disagg-revision": "v2"}}
 	got := screenCandidates(t, screener, request, candidates)
 	if len(got) != 1 || got[0].GetMetadata().Name != "v2" {
 		t.Fatalf("strict screening mismatch: %v", got)
 	}
-	request.Headers["x-disagg-revision"] = "missing"
+	request.Headers["x-llm-d-disagg-revision"] = "missing"
 	if got := screenCandidates(t, screener, request, candidates); len(got) != 0 {
 		t.Fatalf("strict no-match must be empty: %v", got)
 	}
@@ -625,7 +625,7 @@ func TestResponseHeaderStampsRevision(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	response := &fwkrc.Response{Headers: map[string]string{}}
 	screener.ResponseHeader(context.Background(), nil, response, &fwkdl.EndpointMetadata{Labels: revLabels("v1")})
-	if response.Headers["x-disagg-revision"] != "v1" {
+	if response.Headers["x-llm-d-disagg-revision"] != "v1" {
 		t.Fatalf("revision header not stamped: %#v", response.Headers)
 	}
 }
@@ -636,7 +636,7 @@ func TestResponseHeaderStampsRevisionWithGatingDisabled(t *testing.T) {
 	screener := newTestScreener(config)
 	response := &fwkrc.Response{Headers: map[string]string{}}
 	screener.ResponseHeader(context.Background(), nil, response, &fwkdl.EndpointMetadata{Labels: revLabels("v1")})
-	if response.Headers["x-disagg-revision"] != "v1" {
+	if response.Headers["x-llm-d-disagg-revision"] != "v1" {
 		t.Fatalf("revision header not stamped with gating disabled: %#v", response.Headers)
 	}
 }
