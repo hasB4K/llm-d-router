@@ -78,9 +78,7 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 	chosenRevision := requestedRevision
 	// A forwarded revision header is authoritative. In particular, a decode
 	// request in P/D must use the revision stamped by prefill; it must not depend
-	// on the two EPPs sharing a CrossReplicaSyncer. GetOrSet is only needed when
-	// no earlier phase response exists to provide the header, as with parallel
-	// encode requests in E/P/D.
+	// on the two EPPs sharing a CrossReplicaSyncer.
 	if chosenRevision == "" {
 		chosenRevision = pickWeightedRevision(shares, rand.Float64())
 		if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {
@@ -120,9 +118,9 @@ func revisionDecisionID(request *fwksched.InferenceRequest) string {
 func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (string, error) {
 	syncer := c.crossReplicaSyncer()
 	if syncer == nil {
-		// A coordinator issues a separate request for each phase. When those
-		// requests reach one EPP process, this store makes their shared decision
-		// ID reuse the first revision without requiring cross-replica storage.
+		// Parallel encode requests can share a decision ID and reach this EPP
+		// without an earlier x-llm-d-disagg-revision response to forward. Local state
+		// makes them reuse the first revision selected for that decision ID.
 		actual, _ := c.localRevisionDecisions.ReadOrWrite(id, localRevisionDecisionStateKey, revisionDecision(candidate))
 		revision, ok := actual.(revisionDecision)
 		if !ok || revision == "" {
