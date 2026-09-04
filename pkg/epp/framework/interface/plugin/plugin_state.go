@@ -125,17 +125,19 @@ func (s *PluginState) Read(requestID string, key StateKey) (StateData, error) {
 // Note: overwriting an existing key does NOT trigger OnEvicted on the displaced value.
 func (s *PluginState) Write(requestID string, key StateKey, val StateData) {
 	s.requestToLastAccessTime.Store(requestID, time.Now())
-	var stateData *sync.Map
-	stateMap, ok := s.storage.Load(requestID)
-	if ok {
-		stateData = stateMap.(*sync.Map)
-	} else {
-		stateData = &sync.Map{}
-	}
-
+	stateMap, _ := s.storage.LoadOrStore(requestID, &sync.Map{})
+	stateData := stateMap.(*sync.Map)
 	stateData.Store(key, val)
+}
 
-	s.storage.Store(requestID, stateData)
+// ReadOrWrite atomically returns the data already stored for key and requestID,
+// or stores and returns val when no data exists. The boolean reports whether
+// the returned data was already present.
+func (s *PluginState) ReadOrWrite(requestID string, key StateKey, val StateData) (actual StateData, existed bool) {
+	s.requestToLastAccessTime.Store(requestID, time.Now())
+	stateMap, _ := s.storage.LoadOrStore(requestID, &sync.Map{})
+	actualValue, existed := stateMap.(*sync.Map).LoadOrStore(key, val)
+	return actualValue.(StateData), existed
 }
 
 // Delete deletes data associated with the given requestID from PluginState.

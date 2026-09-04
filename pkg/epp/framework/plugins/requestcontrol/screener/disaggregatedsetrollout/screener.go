@@ -26,10 +26,19 @@ import (
 
 	reqcommon "github.com/llm-d/llm-d-router/pkg/common/request"
 	fwkdl "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/datalayer"
+	fwkplugin "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/plugin"
 	fwksched "github.com/llm-d/llm-d-router/pkg/epp/framework/interface/scheduling"
 )
 
-var errInvalidSharedRevision = errors.New("cross-replica syncer returned an invalid rollout revision")
+const localRevisionDecisionStateKey fwkplugin.StateKey = "revision-decision"
+
+var errInvalidRevisionDecision = errors.New("revision coordination returned an invalid rollout revision")
+
+type revisionDecision string
+
+func (r revisionDecision) Clone() fwkplugin.StateData {
+	return r
+}
 
 // Screen applies revision gating and strict revision selection before
 // scheduling profiles observe the endpoint set.
@@ -114,8 +123,12 @@ func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (
 		// A coordinator issues a separate request for each phase. When those
 		// requests reach one EPP process, this store makes their shared decision
 		// ID reuse the first revision without requiring cross-replica storage.
-		revision, _ := c.localRevisionDecisions.GetOrSet(id, candidate)
-		return revision, nil
+		actual, _ := c.localRevisionDecisions.ReadOrWrite(id, localRevisionDecisionStateKey, revisionDecision(candidate))
+		revision, ok := actual.(revisionDecision)
+		if !ok || revision == "" {
+			return "", errInvalidRevisionDecision
+		}
+		return string(revision), nil
 	}
 
 	actual, _, err := syncer.GetOrSet(ctx, c.revisionDecisionStateKey, id, candidate)
@@ -124,7 +137,7 @@ func (c *Screener) getOrSetRevision(ctx context.Context, id, candidate string) (
 	}
 	revision, ok := actual.(string)
 	if !ok || revision == "" {
-		return "", errInvalidSharedRevision
+		return "", errInvalidRevisionDecision
 	}
 	return revision, nil
 }

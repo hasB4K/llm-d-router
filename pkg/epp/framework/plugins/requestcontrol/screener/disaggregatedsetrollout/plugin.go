@@ -57,7 +57,7 @@ type Screener struct {
 	roleLabelKey             string
 	revisionDecisionStateKey fwkdl.StateKey
 	handle                   fwkplugin.Handle
-	localRevisionDecisions   localGetOrSet
+	localRevisionDecisions   *fwkplugin.PluginState
 
 	mu           sync.RWMutex
 	pods         map[types.NamespacedName]podInfo
@@ -123,10 +123,8 @@ func newScreener(name string, config Config, scope labels.Selector, handle fwkpl
 		roleLabelKey:             roleLabelKey,
 		revisionDecisionStateKey: fwkdl.StateKey("disaggregatedset-rollout:" + name),
 		handle:                   handle,
+		localRevisionDecisions:   fwkplugin.NewPluginState(handle.Context()),
 		pods:                     make(map[types.NamespacedName]podInfo),
-	}
-	if config.RevisionGating.Active() {
-		go screener.localRevisionDecisions.runGC(handle.Context(), localGetOrSetSweepInterval)
 	}
 	return screener
 }
