@@ -17,7 +17,7 @@ from urllib.request import Request, urlopen
 REVISION_LABEL = "disaggregatedset.x-k8s.io/revision"
 ROLE_LABEL = "disaggregatedset.x-k8s.io/role"
 SET_LABEL = "disaggregatedset.x-k8s.io/name=revision-rollout"
-REVISION_HEADER = "x-disagg-revision"
+REVISION_HEADER = "x-llm-d-disagg-revision"
 PREFERRED_ROLE_HEADER = "x-preferred-role"
 CHAT_PATH = "/v1/chat/completions"
 CHAT_BODY = {"model": "test", "messages": [{"role": "user", "content": "hi"}]}

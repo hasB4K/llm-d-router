@@ -37,7 +37,7 @@ Two EPPs:
 ```text
 request -> prefill Envoy/EPP -> prefill pod
                     |
-                    +-- x-disagg-revision header
+                    +-- x-llm-d-disagg-revision header
                                    |
                                    v
                     decode Envoy/EPP -> decode pod -> response

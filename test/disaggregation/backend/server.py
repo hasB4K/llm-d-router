@@ -19,7 +19,7 @@ async def echo(request: Request):
         "status": "ok",
         "role": os.environ.get("ROLE", ""),
         "revision": os.environ.get("REVISION", ""),
-        "revision_header": request.headers.get("x-disagg-revision"),
+        "revision_header": request.headers.get("x-llm-d-disagg-revision"),
         "prefiller_host_port": request.headers.get("x-prefiller-host-port"),
     }
 

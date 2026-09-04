@@ -14,7 +14,7 @@ data:
         scope:
           labelSelector: "disaggregatedset.x-k8s.io/name=revision-rollout"
         revisionGating:
-          revisionHeaderName: x-disagg-revision
+          revisionHeaderName: x-llm-d-disagg-revision
           revisionLabelKey: disaggregatedset.x-k8s.io/revision
           roleLabelKey: disaggregatedset.x-k8s.io/role
           mode: __MODE__
