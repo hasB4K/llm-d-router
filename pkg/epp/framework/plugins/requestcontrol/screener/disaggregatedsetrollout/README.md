@@ -137,7 +137,10 @@ Leaving `needCoordination` enabled does not add a syncer round trip during
 normal operation. The plugin calls `GetOrSet` only while it observes Pods from
 multiple revisions, including NotReady Pods for a revision that is starting.
 With one observed revision, every request has the same possible revision and
-the plugin uses it directly.
+the plugin uses it directly. A same-host Redis `GetOrSet` benchmark measured
+~0.2 ms P50 at 1,000 requests per second, so the rollout-only overhead is
+typically negligible compared with model-serving latency. Network topology,
+authentication, and TLS can change this measurement.
 
 ### Separate Prefill and Decode EPPs (P/D)
 
@@ -166,6 +169,10 @@ header pins decode to that choice:
 revisionGating:
   needCoordination: false
 ```
+
+Disabling coordination is an optional optimization. Use it only when the
+deployment cannot issue parallel E/P/D requests. When the serving topology is
+uncertain, retain the default `needCoordination: true`.
 
 ### Parallel Encode Requests (E/P/D)
 
@@ -317,7 +324,7 @@ request. Do not add it to a scheduling profile.
 | `revisionGating.revisionHeaderName` | string | No | `x-llm-d-disagg-revision` | Request and response header carrying the rollout revision. A supplied value is a strict constraint. |
 | `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
 | `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
-| `revisionGating.needCoordination` | boolean | No | `true` | Coordinates one rollout revision across parallel requests while multiple revisions are observed. Keep enabled for E/P/D; sequential P/D can disable it. |
+| `revisionGating.needCoordination` | boolean | No | `true` | Coordinates one rollout revision across parallel requests while multiple revisions are observed. Keep enabled for E/P/D; known sequential P/D deployments may optionally disable it. |
 
 ## DisaggregatedSet Slice Affinity
 
