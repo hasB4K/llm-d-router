@@ -58,7 +58,8 @@ type Runtime struct {
 	crossReplicaPub *crossReplicaPublisher
 
 	notificationSyncMu sync.RWMutex
-	notificationSyncs  []*notificationInitialSync
+	// notificationSyncs remains nil until Start has registered every source.
+	notificationSyncs []*notificationInitialSync
 
 	pendingMu            sync.Mutex
 	pendingRegistrations []fwkdl.PendingRegistration // code-registered (source-type, extractor) pairs, resolved by Configure()
@@ -390,6 +391,10 @@ func (r *Runtime) findSourceByType(sourceType string, gvkFilter *schema.GroupVer
 // Start is called to enable the Runtime to start processing data collection. It wires
 // Kubernetes notifications into the manager and starts cross-replica syncing.
 func (r *Runtime) Start(ctx context.Context, mgr ctrl.Manager) error {
+	r.notificationSyncMu.Lock()
+	r.notificationSyncs = nil
+	r.notificationSyncMu.Unlock()
+
 	r.StartCrossReplicaSync(ctx)
 
 	notificationSyncs := make([]*notificationInitialSync, 0, r.notification.Count())
@@ -418,15 +423,18 @@ func (r *Runtime) Start(ctx context.Context, mgr ctrl.Manager) error {
 	return nil
 }
 
-// CheckReady reports whether every notification source has processed the
-// events from its initial Kubernetes list.
+// CheckReady reports readiness after Start has registered every notification
+// source and each source has processed its initial Kubernetes events.
 func (r *Runtime) CheckReady() error {
 	r.notificationSyncMu.RLock()
 	defer r.notificationSyncMu.RUnlock()
 
+	if r.notificationSyncs == nil {
+		return errors.New("notification sources have not been initialized")
+	}
 	for _, initialSync := range r.notificationSyncs {
 		if !initialSync.hasSynced() {
-			return fmt.Errorf("notification source %s has not processed its initial events", initialSync.sourceName)
+			return fmt.Errorf("notification source %s has not processed its initial events", initialSync.tracker.Name())
 		}
 	}
 	return nil

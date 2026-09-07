@@ -51,8 +51,8 @@ func TestNotificationInitialSync(t *testing.T) {
 	initialSync := newNotificationInitialSync("pods")
 	first := types.NamespacedName{Namespace: "default", Name: "first"}
 	second := types.NamespacedName{Namespace: "default", Name: "second"}
-	initialSync.processed.Start(first)
-	initialSync.processed.Start(second)
+	initialSync.tracker.Start(first)
+	initialSync.tracker.Start(second)
 
 	wrapped := &notificationInitialSyncSource{
 		SyncingSource: &testSyncingSource{},
@@ -65,12 +65,12 @@ func TestNotificationInitialSync(t *testing.T) {
 		t.Fatal("initial sync completed before queued keys were processed")
 	}
 
-	initialSync.processed.Finished(first)
+	initialSync.tracker.Finished(first)
 	if initialSync.hasSynced() {
 		t.Fatal("initial sync completed before every queued key was processed")
 	}
 
-	initialSync.processed.Finished(second)
+	initialSync.tracker.Finished(second)
 	if !initialSync.hasSynced() {
 		t.Fatal("initial sync did not complete after every queued key was processed")
 	}
@@ -93,6 +93,13 @@ func TestNotificationInitialSyncWaitError(t *testing.T) {
 
 func TestRuntimeNotificationReadiness(t *testing.T) {
 	runtime := NewRuntime(time.Second)
+	if err := runtime.CheckReady(); err == nil {
+		t.Fatal("CheckReady() before Start returned nil")
+	}
+
+	if err := runtime.Start(context.Background(), nil); err != nil {
+		t.Fatalf("Start() without notification sources: %v", err)
+	}
 	if err := runtime.CheckReady(); err != nil {
 		t.Fatalf("CheckReady() without notification sources: %v", err)
 	}
@@ -103,7 +110,7 @@ func TestRuntimeNotificationReadiness(t *testing.T) {
 		t.Fatalf("CheckReady() error = %v, want pending source name", err)
 	}
 
-	initialSync.upstreamSynced.Store(true)
+	initialSync.tracker.UpstreamHasSynced()
 	if err := runtime.CheckReady(); err != nil {
 		t.Fatalf("CheckReady() after an empty initial list: %v", err)
 	}

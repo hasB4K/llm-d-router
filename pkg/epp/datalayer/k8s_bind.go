@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -72,7 +71,9 @@ func bindNotificationSource(src fwkdl.NotificationSource, extractors []fwkdl.Not
 	eventHandler := handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
 		CreateFunc: func(ctx context.Context, event event.TypedCreateEvent[*unstructured.Unstructured], queue workqueue.TypedRateLimitingInterface[reconcile.Request]) {
 			if event.IsInInitialList && event.Object != nil {
-				initialSync.processed.Start(client.ObjectKeyFromObject(event.Object))
+				// Keep the initial-list key pending until Reconcile successfully
+				// dispatches its notification and extractors.
+				initialSync.tracker.Start(client.ObjectKeyFromObject(event.Object))
 			}
 			enqueue.Create(ctx, event, queue)
 		},
@@ -118,19 +119,19 @@ type notificationReconciler struct {
 }
 
 type notificationInitialSync struct {
-	upstreamSynced atomic.Bool
-	processed      synctrack.AsyncTracker[types.NamespacedName]
-	sourceName     string
+	tracker *synctrack.AsyncTracker[types.NamespacedName]
 }
 
 func newNotificationInitialSync(sourceName string) *notificationInitialSync {
-	initialSync := &notificationInitialSync{sourceName: sourceName}
-	initialSync.processed.UpstreamHasSynced = initialSync.upstreamSynced.Load
-	return initialSync
+	return &notificationInitialSync{
+		tracker: synctrack.NewAsyncTracker[types.NamespacedName](sourceName),
+	}
 }
 
+// hasSynced reports whether the Kind source delivered its complete initial list
+// and Reconcile successfully dispatched every key from an IsInInitialList event.
 func (s *notificationInitialSync) hasSynced() bool {
-	return s.processed.HasSynced()
+	return s.tracker.HasSynced()
 }
 
 type notificationInitialSyncSource struct {
@@ -138,11 +139,17 @@ type notificationInitialSyncSource struct {
 	initialSync *notificationInitialSync
 }
 
+// WaitForSync is called by controller-runtime after starting the source and
+// before starting reconciliation workers. The wrapped Kind source returns only
+// after its cache has synced and its handler has received every initial-list
+// event, so all initial keys have been registered with the tracker at this
+// point. UpstreamHasSynced allows the tracker to become ready once reconciliation
+// has successfully dispatched every registered key.
 func (s *notificationInitialSyncSource) WaitForSync(ctx context.Context) error {
 	if err := s.SyncingSource.WaitForSync(ctx); err != nil {
 		return err
 	}
-	s.initialSync.upstreamSynced.Store(true)
+	s.initialSync.tracker.UpstreamHasSynced()
 	return nil
 }
 
@@ -172,7 +179,8 @@ func (rn *notificationReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	err = rn.dispatch(ctx, log, event)
 	if err == nil {
-		rn.initialSync.processed.Finished(req.NamespacedName)
+		// Failed dispatches are retried and remain pending for readiness.
+		rn.initialSync.tracker.Finished(req.NamespacedName)
 	}
 	return ctrl.Result{}, err
 }
