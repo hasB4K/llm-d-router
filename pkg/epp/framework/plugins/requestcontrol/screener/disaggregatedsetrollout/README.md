@@ -107,8 +107,8 @@ revision header, the plugin then:
    a revision missing one role cannot serve the request.
 2. Computes a weight for each remaining revision.
 3. Randomly chooses one candidate revision using those weights.
-4. When `needCoordination` is enabled and Pods from multiple revisions are
-   observed, atomically stores or reads the revision decision through the
+4. When Pods from multiple revisions are observed and `disableCoordination` is
+   false, atomically stores or reads the revision decision through the
    configured `CrossReplicaSyncer`, keyed by `x-llm-d-revision-decision-id` or
    its `x-request-id` fallback. Without a syncer, it stores the decision in the
    local EPP process. A single observed revision requires no coordination.
@@ -133,7 +133,7 @@ When a strict revision header is already present, the plugin does not make a
 new weighted choice. It checks that the requested revision has all required
 roles and keeps only endpoints with that revision.
 
-Leaving `needCoordination` enabled does not add a syncer round trip during
+Coordination is enabled by default and does not add a syncer round trip during
 normal operation. The plugin calls `GetOrSet` only while it observes Pods from
 multiple revisions, including NotReady Pods for a revision that is starting.
 With one observed revision, every request has the same possible revision and
@@ -161,18 +161,18 @@ A decode request without the forwarded `x-llm-d-disagg-revision` does not implem
 the supported P/D protocol. Do not rely on `GetOrSet` to coordinate separate
 prefill and decode EPPs.
 
-For this sequential P/D protocol, `needCoordination` can be disabled. Each
+For this sequential P/D protocol, coordination can be disabled. Each
 logical request makes one unpinned revision choice in prefill, and the forwarded
 header pins decode to that choice:
 
 ```yaml
 revisionGating:
-  needCoordination: false
+  disableCoordination: true
 ```
 
 Disabling coordination is an optional optimization. Use it only when the
 deployment cannot issue parallel E/P/D requests. When the serving topology is
-uncertain, retain the default `needCoordination: true`.
+uncertain, leave `disableCoordination` unset.
 
 ### Parallel Encode Requests (E/P/D)
 
@@ -182,7 +182,7 @@ Parallel encode requests cannot wait for an earlier response to provide
 covered revision authoritative for that logical request. This prevents
 parallel encode requests reaching different EPP replicas from selecting
 different rollout revisions. E/P/D configurations must keep
-`needCoordination: true` and must share a `CrossReplicaSyncer` across EPP
+`disableCoordination: false` and must share a `CrossReplicaSyncer` across EPP
 replicas. A single EPP process can use the local fallback. As soon as a phase
 response supplies `x-llm-d-disagg-revision`, the coordinator forwards that
 header to later requests, which use strict filtering instead of `GetOrSet`.
@@ -324,7 +324,7 @@ request. Do not add it to a scheduling profile.
 | `revisionGating.revisionHeaderName` | string | No | `x-llm-d-disagg-revision` | Request and response header carrying the rollout revision. A supplied value is a strict constraint. |
 | `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
 | `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
-| `revisionGating.needCoordination` | boolean | No | `true` | Coordinates one rollout revision across parallel requests while multiple revisions are observed. Keep enabled for E/P/D; known sequential P/D deployments may optionally disable it. |
+| `revisionGating.disableCoordination` | boolean | No | `false` | Disables coordination of rollout revisions across parallel requests. Set only for known sequential P/D deployments; E/P/D requires coordination. |
 
 ## DisaggregatedSet Slice Affinity
 

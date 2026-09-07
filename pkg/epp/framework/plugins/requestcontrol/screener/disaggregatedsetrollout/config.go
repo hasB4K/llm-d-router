@@ -59,12 +59,12 @@ type Scope struct {
 // A request carrying RevisionHeaderName always selects that revision strictly.
 // The selected endpoint's revision is stamped into the same response header.
 type RevisionGating struct {
-	RevisionHeaderName string     `json:"revisionHeaderName,omitempty"`
-	RevisionLabelKey   string     `json:"revisionLabelKey,omitempty"`
-	RoleLabelKey       string     `json:"roleLabelKey,omitempty"`
-	NeedCoordination   *bool      `json:"needCoordination,omitempty"`
-	Mode               GatingMode `json:"mode"`
-	RequiredRoles      []string   `json:"requiredRoles,omitempty"`
+	RevisionHeaderName  string     `json:"revisionHeaderName,omitempty"`
+	RevisionLabelKey    string     `json:"revisionLabelKey,omitempty"`
+	RoleLabelKey        string     `json:"roleLabelKey,omitempty"`
+	DisableCoordination bool       `json:"disableCoordination,omitempty"`
+	Mode                GatingMode `json:"mode"`
+	RequiredRoles       []string   `json:"requiredRoles,omitempty"`
 }
 
 // UnmarshalJSON normalizes RevisionHeaderName to lowercase because request
@@ -124,7 +124,7 @@ func (g *RevisionGating) Active() bool {
 }
 
 func (g *RevisionGating) coordinationEnabled() bool {
-	return g != nil && (g.NeedCoordination == nil || *g.NeedCoordination)
+	return g != nil && !g.DisableCoordination
 }
 
 // Validate performs static config checks and fills in label-key defaults.

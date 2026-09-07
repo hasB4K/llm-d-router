@@ -559,8 +559,7 @@ func TestScreenerCoordinatesOnlyWhileMultipleRevisionsAreObserved(t *testing.T) 
 
 func TestScreenerCoordinationCanBeDisabled(t *testing.T) {
 	config := validConfig()
-	disabled := false
-	config.RevisionGating.NeedCoordination = &disabled
+	config.RevisionGating.DisableCoordination = true
 	screener := newTestScreener(config)
 	seedCounts(t, screener, map[string]map[string]int{
 		"v1": {"prefill": 1, "decode": 1},
@@ -574,7 +573,7 @@ func TestScreenerCoordinationCanBeDisabled(t *testing.T) {
 		t.Fatalf("screening returned %v", got)
 	}
 	if syncer.calls != 0 {
-		t.Fatalf("needCoordination=false called GetOrSet %d times", syncer.calls)
+		t.Fatalf("disableCoordination=true called GetOrSet %d times", syncer.calls)
 	}
 }
 

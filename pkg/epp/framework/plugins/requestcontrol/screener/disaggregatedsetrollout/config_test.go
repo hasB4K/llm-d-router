@@ -174,13 +174,13 @@ func TestRevisionGating_UnmarshalJSON_LowercasesHeaderName(t *testing.T) {
 }
 
 func TestRevisionGating_UnmarshalJSON_DisablesCoordination(t *testing.T) {
-	raw := []byte(`{"mode":"sum","requiredRoles":["prefill","decode"],"needCoordination":false}`)
+	raw := []byte(`{"mode":"sum","requiredRoles":["prefill","decode"],"disableCoordination":true}`)
 	var gating RevisionGating
 	if err := json.Unmarshal(raw, &gating); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if gating.coordinationEnabled() {
-		t.Fatal("needCoordination=false should disable coordination")
+		t.Fatal("disableCoordination=true should disable coordination")
 	}
 }
 
