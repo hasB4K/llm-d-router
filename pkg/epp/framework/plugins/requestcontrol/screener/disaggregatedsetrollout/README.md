@@ -133,6 +133,12 @@ When a strict revision header is already present, the plugin does not make a
 new weighted choice. It checks that the requested revision has all required
 roles and keeps only endpoints with that revision.
 
+Leaving `needCoordination` enabled does not add a syncer round trip during
+normal operation. The plugin calls `GetOrSet` only while it observes Pods from
+multiple revisions, including NotReady Pods for a revision that is starting.
+With one observed revision, every request has the same possible revision and
+the plugin uses it directly.
+
 ### Separate Prefill and Decode EPPs (P/D)
 
 Prefill first chooses a covered revision and stamps it into the
@@ -152,16 +158,27 @@ A decode request without the forwarded `x-llm-d-disagg-revision` does not implem
 the supported P/D protocol. Do not rely on `GetOrSet` to coordinate separate
 prefill and decode EPPs.
 
+For this sequential P/D protocol, `needCoordination` can be disabled. Each
+logical request makes one unpinned revision choice in prefill, and the forwarded
+header pins decode to that choice:
+
+```yaml
+revisionGating:
+  needCoordination: false
+```
+
 ### Parallel Encode Requests (E/P/D)
 
 Parallel encode requests cannot wait for an earlier response to provide
 `x-llm-d-disagg-revision`. The coordinator gives them the same
 `x-llm-d-revision-decision-id`, and atomic `GetOrSet` makes the first proposed
-covered revision authoritative. Requests that can reach different EPP replicas
-must share a `CrossReplicaSyncer`; a single EPP process can use the local
-fallback. As soon as a phase response supplies `x-llm-d-disagg-revision`, the
-coordinator forwards that header to later requests, which use strict filtering
-instead of `GetOrSet`.
+covered revision authoritative for that logical request. This prevents
+parallel encode requests reaching different EPP replicas from selecting
+different rollout revisions. E/P/D configurations must keep
+`needCoordination: true` and must share a `CrossReplicaSyncer` across EPP
+replicas. A single EPP process can use the local fallback. As soon as a phase
+response supplies `x-llm-d-disagg-revision`, the coordinator forwards that
+header to later requests, which use strict filtering instead of `GetOrSet`.
 
 ### One EPP
 
@@ -300,7 +317,7 @@ request. Do not add it to a scheduling profile.
 | `revisionGating.revisionHeaderName` | string | No | `x-llm-d-disagg-revision` | Request and response header carrying the rollout revision. A supplied value is a strict constraint. |
 | `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
 | `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
-| `revisionGating.needCoordination` | boolean | No | `true` | Enables request-level revision coordination while Pods from multiple revisions are observed. |
+| `revisionGating.needCoordination` | boolean | No | `true` | Coordinates one rollout revision across parallel requests while multiple revisions are observed. Keep enabled for E/P/D; sequential P/D can disable it. |
 
 ## DisaggregatedSet Slice Affinity
 
