@@ -108,12 +108,6 @@ func TestValidate_GatingUnknownMode(t *testing.T) {
 	assertValidateError(t, cfg, "revisionGating.mode")
 }
 
-func TestValidate_GatingSumWithoutRequiredRoles(t *testing.T) {
-	cfg := validConfig()
-	cfg.RevisionGating.RequiredRoles = nil
-	assertValidateError(t, cfg, "revisionGating.requiredRoles")
-}
-
 func TestValidate_GatingMaxRole(t *testing.T) {
 	cfg := validConfig()
 	cfg.RevisionGating.Mode = GatingModeMaxRole

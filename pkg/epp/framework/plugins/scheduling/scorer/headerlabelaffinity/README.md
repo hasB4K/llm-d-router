@@ -91,36 +91,11 @@ for an earlier role can avoid a cross-domain KV-cache transfer.
 
 The affinity scorer stamps the selected prefill Pod's slice into
 `x-disagg-slice`, then uses that request header to prefer the same slice for
-decode:
+decode.
 
-```yaml
-plugins:
-- type: disaggregatedset-rollout-screener
-  name: rollout-screener
-  parameters:
-    scope:
-      labelSelector: disaggregatedset.x-k8s.io/name=my-set
-    revisionGating:
-      revisionHeaderName: x-llm-d-disagg-revision
-      revisionLabelKey: disaggregatedset.x-k8s.io/revision
-      roleLabelKey: disaggregatedset.x-k8s.io/role
-      mode: max-role
-      requiredRoles: [prefill, decode]
-- type: header-label-affinity-scorer
-  name: slice-affinity
-  parameters:
-    headerName: x-disagg-slice
-    labelKey: disaggregatedset.x-k8s.io/slice
-- type: weighted-random-picker
-  name: picker
-
-schedulingProfiles:
-- name: decode
-  plugins:
-  - pluginRef: slice-affinity
-    weight: 3
-  - pluginRef: picker
-```
+See the
+[DisaggregatedSet rollout configuration](../../../requestcontrol/screener/disaggregatedsetrollout/README.md#configuration)
+for the complete screener, affinity scorer, and scheduling profile setup.
 
 The component coordinating the roles must copy `x-disagg-slice` from the
 prefill response into the decode request. The weight determines how strongly
