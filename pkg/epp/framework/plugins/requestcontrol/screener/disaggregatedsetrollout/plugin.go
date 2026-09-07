@@ -67,11 +67,13 @@ type Screener struct {
 type podInfo struct {
 	revision string
 	role     string
+	ready    bool
 }
 
 type revisionDistribution struct {
-	roleCounts map[string]map[string]int
-	shares     map[string]float64
+	roleCounts        map[string]map[string]int
+	shares            map[string]float64
+	needsCoordination bool
 }
 
 var (
@@ -185,7 +187,7 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(event.Object.Object, pod); err != nil {
 		return fmt.Errorf("convert Pod notification %s: %w", key, err)
 	}
-	if !h.screener.acceptsPod(pod) {
+	if !h.screener.tracksPod(pod) {
 		h.screener.removePod(key)
 		return nil
 	}
@@ -194,17 +196,18 @@ func (h *podNotificationHandler) Extract(_ context.Context, event fwkdl.Notifica
 	h.screener.pods[key] = podInfo{
 		revision: pod.Labels[h.screener.revisionLabelKey],
 		role:     pod.Labels[h.screener.roleLabelKey],
+		ready:    podutil.IsPodReady(pod),
 	}
 	h.screener.rebuildDistributionLocked()
 	h.screener.mu.Unlock()
 	return nil
 }
 
-func (c *Screener) acceptsPod(pod *corev1.Pod) bool {
+func (c *Screener) tracksPod(pod *corev1.Pod) bool {
 	if pod == nil || !c.config.RevisionGating.Active() {
 		return false
 	}
-	if !c.scope.Matches(labels.Set(pod.Labels)) || !podutil.IsPodReady(pod) {
+	if !c.scope.Matches(labels.Set(pod.Labels)) {
 		return false
 	}
 	return pod.Labels[c.revisionLabelKey] != "" && pod.Labels[c.roleLabelKey] != ""
@@ -225,11 +228,19 @@ func (c *Screener) rebuildDistributionLocked() {
 		mode = c.config.RevisionGating.Mode
 	}
 	roleCounts := make(map[string]map[string]int)
+	observedRevisions := make(map[string]struct{})
 	for _, pod := range c.pods {
+		// NotReady Pods announce a rollout before the new revision can receive traffic.
+		observedRevisions[pod.revision] = struct{}{}
+		if !pod.ready {
+			continue
+		}
 		incrementRoleCount(roleCounts, pod)
 	}
 	previous := c.distribution
-	c.distribution = newRevisionDistribution(roleCounts, requiredRoles, mode)
+	next := newRevisionDistribution(roleCounts, requiredRoles, mode)
+	next.needsCoordination = c.config.RevisionGating.coordinationEnabled() && len(observedRevisions) > 1
+	c.distribution = next
 	recordRevisionGatingShares(c.typedName.Name, mode, previous, c.distribution)
 }
 

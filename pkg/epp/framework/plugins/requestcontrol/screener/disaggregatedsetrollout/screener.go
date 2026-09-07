@@ -81,7 +81,7 @@ func (c *Screener) Screen(ctx context.Context, request *fwksched.InferenceReques
 	// on the two EPPs sharing a CrossReplicaSyncer.
 	if chosenRevision == "" {
 		chosenRevision = pickWeightedRevision(shares, rand.Float64())
-		if decisionID := revisionDecisionID(request); decisionID != "" && chosenRevision != "" {
+		if decisionID := revisionDecisionID(request); distribution.needsCoordination && decisionID != "" && chosenRevision != "" {
 			var err error
 			chosenRevision, err = c.getOrSetRevision(ctx, decisionID, chosenRevision)
 			if err != nil {

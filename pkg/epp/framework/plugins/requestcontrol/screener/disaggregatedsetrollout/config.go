@@ -62,6 +62,7 @@ type RevisionGating struct {
 	RevisionHeaderName string     `json:"revisionHeaderName,omitempty"`
 	RevisionLabelKey   string     `json:"revisionLabelKey,omitempty"`
 	RoleLabelKey       string     `json:"roleLabelKey,omitempty"`
+	NeedCoordination   *bool      `json:"needCoordination,omitempty"`
 	Mode               GatingMode `json:"mode"`
 	RequiredRoles      []string   `json:"requiredRoles,omitempty"`
 }
@@ -120,6 +121,10 @@ func (g *RevisionGating) Active() bool {
 		return false
 	}
 	return false
+}
+
+func (g *RevisionGating) coordinationEnabled() bool {
+	return g != nil && (g.NeedCoordination == nil || *g.NeedCoordination)
 }
 
 // Validate performs static config checks and fills in label-key defaults.

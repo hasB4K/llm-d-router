@@ -66,6 +66,12 @@ func readyPod(name, revision, role string) *corev1.Pod {
 	}
 }
 
+func notReadyPod(name, revision, role string) *corev1.Pod {
+	pod := readyPod(name, revision, role)
+	pod.Status.Conditions[0].Status = corev1.ConditionFalse
+	return pod
+}
+
 func newTestScreener(config Config) *Screener {
 	if err := config.Validate(); err != nil {
 		panic(err)
@@ -183,18 +189,20 @@ func (r *captureRegistrar) Register(registration fwkdl.PendingRegistration) erro
 	return nil
 }
 
-func TestPodNotificationsTrackOnlyReadyPodsInScope(t *testing.T) {
+func TestPodNotificationsTrackLabeledPodsAndCountOnlyReadyPods(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	handler := &podNotificationHandler{screener: screener}
 	inScope := readyPod("p1", "v1", "prefill")
 	outOfScope := readyPod("p2", "v2", "decode")
 	outOfScope.Labels["disaggregatedset.x-k8s.io/name"] = "other"
-	notReady := readyPod("p3", "v1", "decode")
-	notReady.Status.Conditions[0].Status = corev1.ConditionFalse
+	notReady := notReadyPod("p3", "v1", "decode")
 	for _, pod := range []*corev1.Pod{inScope, outOfScope, notReady} {
 		if err := handler.Extract(context.Background(), podEvent(t, pod, fwkdl.EventAddOrUpdate)); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if len(screener.pods) != 2 {
+		t.Fatalf("tracked Pods = %d, want the Ready and NotReady in-scope Pods", len(screener.pods))
 	}
 	counts := screener.distributionSnapshot().roleCounts
 	if counts["v1"]["prefill"] != 1 || len(counts["v1"]) != 1 || len(counts) != 1 {
@@ -502,6 +510,74 @@ func (s *decisionSyncer) GetOrSet(_ context.Context, _ fwkdl.StateKey, id string
 	return s.actual, true, s.err
 }
 
+func TestScreenerCoordinatesOnlyWhileMultipleRevisionsAreObserved(t *testing.T) {
+	screener := newTestScreener(validConfig())
+	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
+	syncer := &decisionSyncer{actual: "v1"}
+	screener.handle.SetCrossReplicaSyncer(syncer)
+	candidates := candidatePool(1, 0)
+
+	screen := func(requestID string) {
+		t.Helper()
+		request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RequestIDHeaderKey: requestID}}
+		if got := screenCandidates(t, screener, request, candidates); len(got) != 1 {
+			t.Fatalf("screening returned %v", got)
+		}
+	}
+
+	screen("stable")
+	if syncer.calls != 0 {
+		t.Fatalf("stable revision called GetOrSet %d times", syncer.calls)
+	}
+
+	seedPods(t, screener, notReadyPod("v1-scale-up", "v1", "decode"))
+	screen("same-revision-scale-up")
+	if syncer.calls != 0 {
+		t.Fatalf("same-revision scale-up called GetOrSet %d times", syncer.calls)
+	}
+
+	v2Pending := notReadyPod("v2-pending", "v2", "prefill")
+	seedPods(t, screener, v2Pending)
+	screen("rollout-started")
+	if syncer.calls != 1 {
+		t.Fatalf("pending second revision called GetOrSet %d times, want 1", syncer.calls)
+	}
+	distribution := screener.distributionSnapshot()
+	if distribution.shares["v1"] != 1 || distribution.shares["v2"] != 0 {
+		t.Fatalf("NotReady revision affected traffic shares: %#v", distribution.shares)
+	}
+
+	handler := &podNotificationHandler{screener: screener}
+	if err := handler.Extract(context.Background(), podEvent(t, v2Pending, fwkdl.EventDelete)); err != nil {
+		t.Fatal(err)
+	}
+	screen("rollout-cancelled")
+	if syncer.calls != 1 {
+		t.Fatalf("deleted second revision left GetOrSet enabled: %d calls", syncer.calls)
+	}
+}
+
+func TestScreenerCoordinationCanBeDisabled(t *testing.T) {
+	config := validConfig()
+	disabled := false
+	config.RevisionGating.NeedCoordination = &disabled
+	screener := newTestScreener(config)
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
+	syncer := &decisionSyncer{err: errors.New("must not be called")}
+	screener.handle.SetCrossReplicaSyncer(syncer)
+
+	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RequestIDHeaderKey: "request-id"}}
+	if got := screenCandidates(t, screener, request, candidatePool(1, 1)); len(got) != 1 {
+		t.Fatalf("screening returned %v", got)
+	}
+	if syncer.calls != 0 {
+		t.Fatalf("needCoordination=false called GetOrSet %d times", syncer.calls)
+	}
+}
+
 func TestScreenerUsesSharedRevisionDecisionID(t *testing.T) {
 	screener := newTestScreener(validConfig())
 	seedCounts(t, screener, map[string]map[string]int{
@@ -545,11 +621,14 @@ func TestScreenerUsesRequestIDWithoutRevisionDecisionID(t *testing.T) {
 
 func TestScreenerRejectsNonStringRevisionDecision(t *testing.T) {
 	screener := newTestScreener(validConfig())
-	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
 	screener.handle.SetCrossReplicaSyncer(&decisionSyncer{actual: 1})
 
 	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RevisionDecisionIDHeaderKey: "decision-id"}}
-	if got := screenCandidates(t, screener, request, candidatePool(1, 0)); len(got) != 0 {
+	if got := screenCandidates(t, screener, request, candidatePool(1, 1)); len(got) != 0 {
 		t.Fatalf("non-string revision decision must fail closed, got %v", got)
 	}
 }
@@ -573,24 +652,30 @@ func TestScreenerLocalRoutingDecisionIsStable(t *testing.T) {
 
 func TestScreenerSharedRoutingDecisionFailureFailsClosed(t *testing.T) {
 	screener := newTestScreener(validConfig())
-	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
 	screener.handle.SetCrossReplicaSyncer(&decisionSyncer{err: errors.New("store unavailable")})
 	request := &fwksched.InferenceRequest{Headers: map[string]string{reqcommon.RevisionDecisionIDHeaderKey: "decision-id"}}
-	if got := screenCandidates(t, screener, request, candidatePool(1, 0)); len(got) != 0 {
+	if got := screenCandidates(t, screener, request, candidatePool(1, 1)); len(got) != 0 {
 		t.Fatalf("sync failure must fail closed, got %v", got)
 	}
 }
 
 func TestScreenerStrictRevisionBypassesSharedRoutingDecision(t *testing.T) {
 	screener := newTestScreener(validConfig())
-	seedCounts(t, screener, map[string]map[string]int{"v1": {"prefill": 1, "decode": 1}})
+	seedCounts(t, screener, map[string]map[string]int{
+		"v1": {"prefill": 1, "decode": 1},
+		"v2": {"prefill": 1, "decode": 1},
+	})
 	syncer := &decisionSyncer{err: errors.New("must not be called")}
 	screener.handle.SetCrossReplicaSyncer(syncer)
 	request := &fwksched.InferenceRequest{Headers: map[string]string{
 		reqcommon.RevisionDecisionIDHeaderKey: "decision-id",
 		"x-llm-d-disagg-revision":             "v1",
 	}}
-	got := screenCandidates(t, screener, request, candidatePool(1, 0))
+	got := screenCandidates(t, screener, request, candidatePool(1, 1))
 	if len(got) != 1 || syncer.calls != 0 {
 		t.Fatalf("strict revision should bypass GetOrSet: endpoints=%v calls=%d", got, syncer.calls)
 	}

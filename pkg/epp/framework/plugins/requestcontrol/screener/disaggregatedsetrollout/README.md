@@ -97,17 +97,21 @@ request. Once both revisions are covered, decode is the globally largest role.
 
 ## Request Lifecycle
 
-For every Pod notification, the plugin caches the Ready Pod count by revision
-and role. For a request without a strict revision header, it then:
+For every Pod notification, the plugin tracks each labeled Pod's revision, role,
+and readiness. Only Ready Pods contribute to the traffic distribution. A
+NotReady Pod from a second revision enables revision-decision coordination
+before that revision can receive traffic. For a request without a strict
+revision header, the plugin then:
 
 1. Removes every revision that has no Ready Pod for any required role, because
    a revision missing one role cannot serve the request.
 2. Computes a weight for each remaining revision.
 3. Randomly chooses one candidate revision using those weights.
-4. When the request carries `x-llm-d-revision-decision-id`, or falls back to
-   `x-request-id`, atomically stores or reads the revision decision through the
-   configured `CrossReplicaSyncer`. Without one, it stores the decision in the
-   local EPP process.
+4. When `needCoordination` is enabled and Pods from multiple revisions are
+   observed, atomically stores or reads the revision decision through the
+   configured `CrossReplicaSyncer`, keyed by `x-llm-d-revision-decision-id` or
+   its `x-request-id` fallback. Without a syncer, it stores the decision in the
+   local EPP process. A single observed revision requires no coordination.
 5. Exposes only the resulting revision's endpoints to all scheduling profiles.
 6. Stamps the selected endpoint's revision into the configured response header.
 
@@ -296,6 +300,7 @@ request. Do not add it to a scheduling profile.
 | `revisionGating.revisionHeaderName` | string | No | `x-llm-d-disagg-revision` | Request and response header carrying the rollout revision. A supplied value is a strict constraint. |
 | `revisionGating.revisionLabelKey` | string | No | `disaggregatedset.x-k8s.io/revision` | Label identifying a rollout revision. |
 | `revisionGating.roleLabelKey` | string | No | `disaggregatedset.x-k8s.io/role` | Label identifying a Pod role. |
+| `revisionGating.needCoordination` | boolean | No | `true` | Enables request-level revision coordination while Pods from multiple revisions are observed. |
 
 ## DisaggregatedSet Slice Affinity
 

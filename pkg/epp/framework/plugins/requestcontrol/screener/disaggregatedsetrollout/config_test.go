@@ -73,6 +73,9 @@ func TestValidate_GatingDefaults(t *testing.T) {
 	if cfg.RevisionGating.RoleLabelKey != DefaultRoleLabel {
 		t.Fatalf("want default %q, got %q", DefaultRoleLabel, cfg.RevisionGating.RoleLabelKey)
 	}
+	if !cfg.RevisionGating.coordinationEnabled() {
+		t.Fatal("coordination should default to enabled")
+	}
 }
 
 func TestValidate_GatingRequiredRolesEmpty(t *testing.T) {
@@ -173,6 +176,17 @@ func TestRevisionGating_UnmarshalJSON_LowercasesHeaderName(t *testing.T) {
 	}
 	if got := strings.Join(gating.RequiredRoles, ","); got != "prefill,decode" {
 		t.Fatalf("requiredRoles = %q, want prefill,decode", got)
+	}
+}
+
+func TestRevisionGating_UnmarshalJSON_DisablesCoordination(t *testing.T) {
+	raw := []byte(`{"mode":"sum","requiredRoles":["prefill","decode"],"needCoordination":false}`)
+	var gating RevisionGating
+	if err := json.Unmarshal(raw, &gating); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if gating.coordinationEnabled() {
+		t.Fatal("needCoordination=false should disable coordination")
 	}
 }
 
