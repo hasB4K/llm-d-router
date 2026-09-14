@@ -96,7 +96,7 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 	// kwargs_data, so the encode fan-out and EC handoff are redundant. Skipping it
 	// avoids shipping the oversized preprocessed pixel tensor a second time
 	// (see https://github.com/vllm-project/vllm/issues/46722).
-	if reqCtx.OriginalPath == gateway.DefaultGeneratePath {
+	if reqcommon.DetectAPIType(reqCtx.OriginalPath) == reqcommon.APITypeGenerate {
 		logger.V(logutil.DEFAULT).Info("skipping encode for generate request")
 		return nil
 	}
@@ -106,7 +106,7 @@ func (s *EncodeStep) Execute(ctx context.Context, reqCtx *pipeline.RequestContex
 
 	format := resolveFormat(s.useOpenAIFormat, reqCtx.OriginalPath)
 	var imageParts []map[string]any
-	if format == gateway.FormatChatCompletions {
+	if format == reqcommon.APITypeChatCompletions {
 		imageParts = collectImageParts(reqCtx.Body)
 	}
 
@@ -142,7 +142,7 @@ func (s *EncodeStep) executeOne(
 	reqCtx *pipeline.RequestContext,
 	index int,
 	entry pipeline.MultimodalEntry,
-	format gateway.RequestFormat,
+	format reqcommon.APIType,
 	imageParts []map[string]any,
 ) (map[string]any, http.Header, error) {
 	tokenIDs := s.buildEncodeTokenIDs(reqCtx.TokenIDs, entry)
@@ -154,7 +154,7 @@ func (s *EncodeStep) executeOne(
 		return nil, nil, err
 	}
 
-	path := gateway.PathForFormat(format)
+	path := format.Path()
 	logger.V(logutil.DEFAULT).Info("sending sub-request", "index", index, "path", path)
 	headers := reqCtx.ForwardedHeaders()
 	headers[reqcommon.RequestIDHeaderKey] = reqCtx.RequestID
@@ -211,9 +211,9 @@ func (s *EncodeStep) buildEncodeTokenIDs(fullTokenIDs []int, entry pipeline.Mult
 	return tokenIDs
 }
 
-func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, format gateway.RequestFormat, imageParts []map[string]any) map[string]any {
+func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs []int, entry pipeline.MultimodalEntry, format reqcommon.APIType, imageParts []map[string]any) map[string]any {
 	switch format {
-	case gateway.FormatChatCompletions:
+	case reqcommon.APITypeChatCompletions:
 		imageContent := buildSingleImageContent(imageParts, entry.Index)
 		body := map[string]any{
 			"model": reqCtx.Model,
@@ -231,7 +231,7 @@ func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs [
 				},
 			},
 		}
-		capSingleTokenOutput(body, format)
+		reqcommon.CapSingleToken(body, format)
 		return body
 	default:
 		body := map[string]any{
@@ -243,7 +243,7 @@ func (s *EncodeStep) buildEncodeBody(reqCtx *pipeline.RequestContext, tokenIDs [
 				"kwargs_data":     mmKwargsField([]string{entry.KwargsData}),
 			},
 		}
-		capSingleTokenOutput(body, format)
+		reqcommon.CapSingleToken(body, format)
 		return body
 	}
 }
