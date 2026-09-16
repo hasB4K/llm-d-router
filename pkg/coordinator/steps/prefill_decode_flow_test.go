@@ -56,7 +56,7 @@ func TestECTransferParams_NotForwardedToDecodeBackend(t *testing.T) {
 
 	reqCtx := &pipeline.RequestContext{
 		RequestID:    "test-no-ec",
-		OriginalPath: gateway.PathChatCompletions,
+		OriginalPath: reqcommon.PathChatCompletions,
 		Model:        "llama-3",
 		Stream:       false,
 		// Simulate encode step having populated ECTransferParams.
@@ -131,7 +131,7 @@ func TestKVTransferParams_FlowFromPrefillToDecode(t *testing.T) {
 	reqCtx := &pipeline.RequestContext{
 		RequestID:          "test-flow",
 		RevisionDecisionID: revisionDecisionID,
-		OriginalPath:       gateway.PathChatCompletions,
+		OriginalPath:       reqcommon.PathChatCompletions,
 		Model:              "llama-3",
 		Stream:             false,
 		TokenIDs:           []int{1, 32000, 32000, 32000, 2345},
