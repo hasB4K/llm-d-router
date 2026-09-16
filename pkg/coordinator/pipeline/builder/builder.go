@@ -66,8 +66,8 @@ func mergePipelineDefaults(params map[string]any, cfg config.PipelineConfig) map
 	return out
 }
 
-// Build validates cfg.Pipeline and constructs its steps in order.
-func Build(cfg *config.Config, gwClient *gateway.Client) ([]pipeline.Step, error) {
+// Build validates cfg.Pipeline and constructs its pipeline.
+func Build(cfg *config.Config, gwClient *gateway.Client) (*pipeline.Pipeline, error) {
 	if err := validatePipeline(cfg.Pipeline); err != nil {
 		return nil, err
 	}
@@ -85,5 +85,5 @@ func Build(cfg *config.Config, gwClient *gateway.Client) ([]pipeline.Step, error
 
 		pipelineSteps = append(pipelineSteps, step)
 	}
-	return pipelineSteps, nil
+	return pipeline.NewWithForwardResponseHeaders(pipelineSteps, cfg.Pipeline.ForwardResponseHeaders)
 }
