@@ -327,8 +327,9 @@ for the comparison.
 ### Cross-phase scheduling headers
 
 An EPP plugin can stamp scheduling metadata from a selected endpoint onto its
-response. Configure the pipeline once to carry selected headers through every
-later phase:
+response. The coordinator forwards `x-llm-d-disagg-revision` by default. Set
+`forward_response_headers` to replace that default and carry selected headers
+through every later phase:
 
 ```yaml
 pipeline:
@@ -355,7 +356,9 @@ The coordinator sends the same revision decision ID to every phase. A
 revision-aware EPP plugin can use an atomic cross-replica operation to choose
 one revision for parallel encode requests and reuse it for prefill and decode.
 The decision ID is independent of `x-request-id`, so a client cannot pin a
-revision by supplying a request ID.
+revision by supplying a request ID. The default response-header forwarding then
+carries the selected `x-llm-d-disagg-revision` to later phases as a strict
+constraint.
 
 ### Decode disaggregation deciders
 

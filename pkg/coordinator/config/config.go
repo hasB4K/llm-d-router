@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+
+	"github.com/llm-d/llm-d-router/pkg/common/request"
 )
 
 type Config struct {
@@ -88,6 +90,7 @@ func Load(path string) (*Config, error) {
 	v.SetDefault("gateway.idle_conn_timeout", 90*time.Second)
 	v.SetDefault("gateway.timeout", 60*time.Second)
 	v.SetDefault("pipeline.use_openai_format", true)
+	v.SetDefault("pipeline.forward_response_headers", []string{request.DisaggregatedRevisionHeaderKey})
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("reading config: %w", err)
